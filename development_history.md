@@ -122,5 +122,24 @@ e69dd74 docs: add future AI model pipeline, deployment compose instructions, and
 ddea179 docs: finalize Phase 3 walkthrough guide covering ingestion services and APIs
 abfebb4 docs: update development history timeline with Phase 3 workflow details and complete commit log
 441ad8a feat(ai): implement AIModelManager singleton, Text/Audio/Video embedding pipelines, and ProcessingOrchestrator DB updater
+34f22a7 feat(search): implement semantic search repositories, embedding/analytics services, and API routes
+test(search): add unittest suite, documentation guides, and walkthrough updates
 ```
+
+---
+
+## Phase 5: Semantic Search Engine & Cross-Modal Retrieval
+*Timestamp: 2026-06-13T19:00:00+05:00*
+
+### Objectives
+Implement unified cross-modal semantic search, pgvector similarity retrieval repository, result aggregation and temporal grouping logic, search API endpoints, database analytics telemetry logging, system documentation, and validation testing.
+
+### Key Implementations
+*   **SearchRepository**: Added `SemanticSearchRepository` running async queries on HNSW index using pgvector's `<=>` cosine distance.
+*   **Search Embedding Service**: Added `SearchEmbeddingService` utilizing cached BGE-M3 model, slicing vectors to 512-dim, and L2 normalizing.
+*   **Search Services Orchestrator**: Added `SearchService` managing embedding generation, candidate retrieval, score normalization, duplicate filtering (`DuplicateResultFilter`), adjacent sequence segment aggregation (`ResultAggregator`), and performance analytics logging.
+*   **Analytics Telemetry**: Added `SearchAnalyticsService` writing metrics (query, latency in ms, result count) to a new `search_logs` table.
+*   **Search API Handler**: Created `GET /api/search` route endpoint supporting query parameter `q` and optional `modality` filter.
+*   **Bug Resolution**: Resolved a pre-existing SQLAlchemy reserved attribute name collision by mapping `metadata` to `chunk_metadata` column and adding dynamic attribute getter/setter methods.
+*   **Testing Suite**: Added `backend/tests/test_search.py` containing 11 tests verifying all components using mock objects and Starlette TestClient.
 

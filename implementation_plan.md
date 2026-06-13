@@ -1,90 +1,99 @@
-# Phase 4: AI Model Integration Layer & Embedding Generation Pipeline
+# Phase 5: Semantic Search Engine, Cross-Modal Retrieval, and Search API
 
-Design and implement a production-grade AI model integration layer and embedding generation pipeline. This will load and run sentence-transformers (BGE-M3), CLIP, and Faster-Whisper models, extract multi-modal visual and semantic text representation vectors, and bulk-update PostgreSQL asset chunk rows with 512-dimensional normalized embeddings.
+Design and implement a production-grade semantic search engine supporting cross-modal retrieval, temporal search, result aggregation/deduplication, search analytics persistence, and query filtering.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> To comply with the **512-dimension** database constraint, the output of BGE-M3 (1024-dimensional) is sliced to the first 512 dimensions and L2-normalized. CLIP output is naturally 512-dimensional and will be normalized as well.
+> We will add the `search_logs` table to store query analytics (including text, latency in ms, result count, and timestamps). We will update `init_schema.py` to synchronize this new table.
 >
-> We initialize models via a thread-safe singleton manager (`AIModelManager`) to avoid reloading models on requests.
+> High-dimensional indexing queries are executed asynchronously using pgvector's `<=>` cosine distance operator and joined with assets.
 >
-> Chunks are bulk-updated in batches of 50 to 100 using a single transaction update block.
+> Result aggregation merges adjacent temporal segments from the same media asset (adjacent `chunk_index` values) into a single unified result. Deduplication keeps the match with the highest similarity score.
 >
-> We will add the required AI libraries (`torch`, `transformers`, `sentence-transformers`, `faster-whisper`, `pillow`) to `requirements.txt`.
+> Score normalization translates raw cosine distance values safely into a human-friendly `0.0` to `1.0` range.
 
 ## Open Questions
 
-There are no major open questions. The models, dimensions, pipelines, and bulk update rules are fully specified.
+None. The search endpoints, latency targets, and aggregation specifications are fully detailed.
 
 ## Proposed Changes
 
-### Dependencies & Configuration Updates
+### Database Updates
 
-#### [MODIFY] [requirements.txt](file:///d:/projects/sps_project/backend/requirements.txt)
-Append:
-- `torch>=2.2.0`
-- `transformers>=4.38.0`
-- `sentence-transformers>=2.5.0`
-- `faster-whisper>=1.0.0`
-- `pillow>=10.2.0`
+#### [NEW] [search_log.py](file:///d:/projects/sps_project/backend/models/search_log.py)
+SQLAlchemy model mapping the `search_logs` table. Fields: `id`, `query`, `latency_ms`, `results_count`, `created_at`.
 
----
+#### [MODIFY] [__init__.py (models)](file:///d:/projects/sps_project/backend/models/__init__.py)
+Exposes the new `SearchLog` model.
 
-### AI Model Management & Embedding Services
-
-#### [NEW] [ai_model_manager.py](file:///d:/projects/sps_project/backend/services/ai_model_manager.py)
-Implements the `AIModelManager` class containing thread-safe singleton methods:
-- `load_bge_m3()`
-- `load_clip()`
-- `load_whisper()`
-
-#### [NEW] [text_embedding.py](file:///d:/projects/sps_project/backend/services/text_embedding.py)
-Implements `TextEmbeddingService` containing `embed_text()` which uses BGE-M3, truncates the vector to 512-dim, and performs L2-normalization.
-
-#### [NEW] [audio_embedding.py](file:///d:/projects/sps_project/backend/services/audio_embedding.py)
-Implements `AudioEmbeddingService` utilizing Faster-Whisper to transcribe audio segments locally, returns timestamped textual blocks, and embeds them using BGE-M3.
-
-#### [NEW] [video_embedding.py](file:///d:/projects/sps_project/backend/services/video_embedding.py)
-Implements `VideoEmbeddingService` converting frames to CLIP embeddings and combining them with transcribed audio track embeddings.
-
-#### [NEW] [embedding.py](file:///d:/projects/sps_project/backend/services/embedding.py)
-Implements `EmbeddingService` acting as the main interface to generate 512-dim normalized vectors for any media chunk.
-
-#### [NEW] [processing_orchestrator.py](file:///d:/projects/sps_project/backend/services/processing_orchestrator.py)
-Implements `ProcessingOrchestrator` pulling chunks with `embedding IS NULL` for a given asset, executing the embedding service, and batch-updating the database (batch size 50-100) inside an async transaction scope.
+#### [MODIFY] [init_schema.py](file:///d:/projects/sps_project/backend/core/init_schema.py)
+Includes imports for the `SearchLog` model to sync schemas on startup.
 
 ---
 
-### API Router & Ingestion Integration
+### Repository Layer
 
-#### [MODIFY] [upload.py (api)](file:///d:/projects/sps_project/backend/api/upload.py)
-Enrich the upload response to run the `ProcessingOrchestrator` synchronously after raw ingestion, returning the fully embedded asset status.
+#### [NEW] [search.py (repositories)](file:///d:/projects/sps_project/backend/repositories/search.py)
+Implements `SemanticSearchRepository` carrying out async similarity queries, joining chunks with assets, and filtering by modality.
+
+---
+
+### Service Layer
+
+#### [NEW] [search_embedding.py](file:///d:/projects/sps_project/backend/services/search_embedding.py)
+Implements `SearchEmbeddingService` using the cached BGE-M3 model to embed natural language query strings, slicing vectors to 512 dimensions, and normalizing results.
+
+#### [NEW] [search_analytics.py](file:///d:/projects/sps_project/backend/services/search_analytics.py)
+Implements `SearchAnalyticsService` writing search queries, elapsed milliseconds, and result counts to the `search_logs` table.
+
+#### [NEW] [search.py (services)](file:///d:/projects/sps_project/backend/services/search.py)
+Implements the core `SearchService` orchestrating embedding, candidate retrieval, score normalization, result aggregation (merging adjacent segments), duplicate filtering, and analytics logging.
+
+---
+
+### API Routing
+
+#### [NEW] [search.py (api)](file:///d:/projects/sps_project/backend/api/search.py)
+Implements `GET /api/search` with parameters `q` (query text) and `modality` (optional filter).
+
+#### [MODIFY] [router.py](file:///d:/projects/sps_project/backend/api/router.py)
+Includes the search route under the `/api` and `/api/v1` routers.
+
+---
+
+### System Documentation Updates (In /docs folder)
+
+We will write the following 6 markdown files under `docs/`:
+1.  [semantic_search.md](file:///d:/projects/sps_project/docs/semantic_search.md) - Conceptual details of text semantic matching.
+2.  [vector_retrieval.md](file:///d:/projects/sps_project/docs/vector_retrieval.md) - Details of pgvector HNSW query structures and distances.
+3.  [cross_modal_search.md](file:///d:/projects/sps_project/docs/cross_modal_search.md) - How CLIP and BGE models are queried together.
+4.  [search_api.md](file:///d:/projects/sps_project/docs/search_api.md) - GET /search parameter filters and schema guides.
+5.  [result_aggregation.md](file:///d:/projects/sps_project/docs/result_aggregation.md) - Merging rules for adjacent chunks and filters.
+6.  [search_analytics.md](file:///d:/projects/sps_project/docs/search_analytics.md) - Relational DB tracking logs for metrics.
+
+And modify:
+*   [architecture.md](file:///d:/projects/sps_project/docs/architecture.md) - Expand with search service layers and log models.
 
 ---
 
 ## Verification Plan
 
 ### Automated Verification
-- Verify compilation and import safety of all new AI services:
+- Compile code to verify import safety and typing consistency:
   ```bash
-  python -m py_compile backend/services/*.py
+  python -m py_compile backend/models/*.py backend/repositories/*.py backend/services/*.py backend/api/*.py
   ```
 
 ### Manual Verification
-1. Rebuild and launch the stack:
-   ```bash
-   docker-compose up --build -d
-   ```
-2. Run schema initialization:
+1. Run schema migrations/init:
    ```bash
    docker-compose exec backend python core/init_schema.py
    ```
-3. Run test ingestion:
+2. Test upload of a document to create chunk records.
+3. Trigger search query using cURL requests:
    ```bash
-   curl -X POST "http://localhost:8000/api/v1/upload" -F "file=@sample.txt"
+   curl "http://localhost:8000/api/search?q=AI+vectors"
    ```
-4. Query Postgres to verify that chunks show correct 512-dimensional floating-point array embeddings:
-   ```sql
-   SELECT id, asset_id, chunk_index, start_time, end_time, array_length(embedding, 1) FROM asset_chunks;
-   ```
+4. Confirm response contains aggregated matching chunks with timestamps and normalized similarity scores.
+5. Inspect the `search_logs` table to confirm that query texts, latencies (in milliseconds), and result counts were tracked correctly.
