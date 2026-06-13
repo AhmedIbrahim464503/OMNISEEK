@@ -1,105 +1,90 @@
-# Phase 3: File Ingestion Pipeline, Preprocessing, and Metadata Generation
+# Phase 4: AI Model Integration Layer & Embedding Generation Pipeline
 
-Build and implement the core file ingestion pipeline. This pipeline will accept uploads (.txt, .pdf, .mp3, .wav, .mp4, .mov), execute local file persistence with multi-directory isolation, run raw media structural extractions (text extraction, FFprobe duration parsing, FFMpeg frame/audio parsing), segment metadata temporally, and commit chunks into the Postgres database.
+Design and implement a production-grade AI model integration layer and embedding generation pipeline. This will load and run sentence-transformers (BGE-M3), CLIP, and Faster-Whisper models, extract multi-modal visual and semantic text representation vectors, and bulk-update PostgreSQL asset chunk rows with 512-dimensional normalized embeddings.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> The processing pipeline will run **synchronously** in Phase 3 for validation purposes.
+> To comply with the **512-dimension** database constraint, the output of BGE-M3 (1024-dimensional) is sliced to the first 512 dimensions and L2-normalized. CLIP output is naturally 512-dimensional and will be normalized as well.
 >
-> We will add `pypdf` dependency for parsing text from PDF documents.
+> We initialize models via a thread-safe singleton manager (`AIModelManager`) to avoid reloading models on requests.
 >
-> FFMpeg/FFprobe subprocess executions are invoked to extract frame timestamps and audio tracks. To make the code highly resilient in local non-container tests, the code gracefully catches command failures or missing binaries, logging warning messages and generating realistic placeholders instead of crashing.
+> Chunks are bulk-updated in batches of 50 to 100 using a single transaction update block.
 >
-> The storage system creates directories at `/storage/assets/{asset_id}/` (with subdirectories `raw/`, `frames/`, `audio/`, and `processed/`). We make the base storage directory customizable in `Settings` (defaulting to `./storage`).
+> We will add the required AI libraries (`torch`, `transformers`, `sentence-transformers`, `faster-whisper`, `pillow`) to `requirements.txt`.
 
 ## Open Questions
 
-There are no unresolved open questions. The file types, directories, chunking logic (500-char with 50-overlap text chunks, 30s audio chunks, and 2s video frames/audio mappings) are fully defined.
+There are no major open questions. The models, dimensions, pipelines, and bulk update rules are fully specified.
 
 ## Proposed Changes
 
-### Configuration Updates
-
-#### [MODIFY] [config.py](file:///d:/projects/sps_project/backend/core/config.py)
-Add a configurable setting parameter `STORAGE_DIR` (defaulting to `"./storage"`).
+### Dependencies & Configuration Updates
 
 #### [MODIFY] [requirements.txt](file:///d:/projects/sps_project/backend/requirements.txt)
-Append `pypdf>=4.0.0` and `python-multipart>=0.0.9` (required for FastAPI UploadFile parameters).
+Append:
+- `torch>=2.2.0`
+- `transformers>=4.38.0`
+- `sentence-transformers>=2.5.0`
+- `faster-whisper>=1.0.0`
+- `pillow>=10.2.0`
 
 ---
 
-### Service Layer Implementations
+### AI Model Management & Embedding Services
 
-#### [NEW] [upload.py](file:///d:/projects/sps_project/backend/services/upload.py)
-Implements `UploadService` validating file formats, creating subdirectories under `STORAGE_DIR/assets/{asset_id}/` (`raw/`, `frames/`, `audio/`, `processed/`), writing file streams, and writing the database model.
+#### [NEW] [ai_model_manager.py](file:///d:/projects/sps_project/backend/services/ai_model_manager.py)
+Implements the `AIModelManager` class containing thread-safe singleton methods:
+- `load_bge_m3()`
+- `load_clip()`
+- `load_whisper()`
 
-#### [NEW] [media_processor.py](file:///d:/projects/sps_project/backend/services/media_processor.py)
-Implements `MediaProcessorService` calling `pypdf` for documents, running `ffprobe` for audio/video durations, extracting audio using `ffmpeg`, and converting video frames to JPG formats.
+#### [NEW] [text_embedding.py](file:///d:/projects/sps_project/backend/services/text_embedding.py)
+Implements `TextEmbeddingService` containing `embed_text()` which uses BGE-M3, truncates the vector to 512-dim, and performs L2-normalization.
 
-#### [NEW] [chunking.py](file:///d:/projects/sps_project/backend/services/chunking.py)
-Implements `ChunkingService` containing segmentations for:
-- Text: 500 characters, 50 characters overlap.
-- Audio: 30-second segments.
-- Video: 2-second segments with visual frame metadata mappings.
+#### [NEW] [audio_embedding.py](file:///d:/projects/sps_project/backend/services/audio_embedding.py)
+Implements `AudioEmbeddingService` utilizing Faster-Whisper to transcribe audio segments locally, returns timestamped textual blocks, and embeds them using BGE-M3.
 
-#### [NEW] [ingestion.py](file:///d:/projects/sps_project/backend/services/ingestion.py)
-Implements `IngestionService` orchestrating UploadService, MediaProcessorService, and ChunkingService, executing database entries.
+#### [NEW] [video_embedding.py](file:///d:/projects/sps_project/backend/services/video_embedding.py)
+Implements `VideoEmbeddingService` converting frames to CLIP embeddings and combining them with transcribed audio track embeddings.
 
----
+#### [NEW] [embedding.py](file:///d:/projects/sps_project/backend/services/embedding.py)
+Implements `EmbeddingService` acting as the main interface to generate 512-dim normalized vectors for any media chunk.
 
-### API Routing
-
-#### [NEW] [upload.py (api)](file:///d:/projects/sps_project/backend/api/upload.py)
-Implements `POST /api/upload` endpoint using `UploadFile` and injecting dependencies.
-
-#### [MODIFY] [router.py](file:///d:/projects/sps_project/backend/api/router.py)
-Includes the upload route under the v1 API registry.
+#### [NEW] [processing_orchestrator.py](file:///d:/projects/sps_project/backend/services/processing_orchestrator.py)
+Implements `ProcessingOrchestrator` pulling chunks with `embedding IS NULL` for a given asset, executing the embedding service, and batch-updating the database (batch size 50-100) inside an async transaction scope.
 
 ---
 
-### Documentation In /docs folder
+### API Router & Ingestion Integration
 
-All 9 requested markdown files will be written under `d:\projects\sps_project\docs/`:
-1.  [architecture.md](file:///d:/projects/sps_project/docs/architecture.md) - Clean architecture system overview.
-2.  [ingestion_pipeline.md](file:///d:/projects/sps_project/docs/ingestion_pipeline.md) - Visualized pipeline workflow description.
-3.  [database_schema.md](file:///d:/projects/sps_project/docs/database_schema.md) - Relationship constraints of Assets and Chunks tables.
-4.  [api_reference.md](file:///d:/projects/sps_project/docs/api_reference.md) - Interactive API documentation for endpoints.
-5.  [media_processing.md](file:///d:/projects/sps_project/docs/media_processing.md) - Detail of ffmpeg / ffprobe subprocess executions.
-6.  [chunking_strategy.md](file:///d:/projects/sps_project/docs/chunking_strategy.md) - Overlap parameters and segmentation equations.
-7.  [future_ai_pipeline.md](file:///d:/projects/sps_project/docs/future_ai_pipeline.md) - Next phase plans for CLIP, Whisper, and BGE models.
-8.  [deployment_guide.md](file:///d:/projects/sps_project/docs/deployment_guide.md) - Run and build instructions.
-9.  [troubleshooting.md](file:///d:/projects/sps_project/docs/troubleshooting.md) - Validation errors, permissions issues, FFMpeg failures.
+#### [MODIFY] [upload.py (api)](file:///d:/projects/sps_project/backend/api/upload.py)
+Enrich the upload response to run the `ProcessingOrchestrator` synchronously after raw ingestion, returning the fully embedded asset status.
 
 ---
 
 ## Verification Plan
 
 ### Automated Verification
-- Verify the compilation of all written service modules and API files:
+- Verify compilation and import safety of all new AI services:
   ```bash
-  python -m py_compile backend/services/*.py backend/api/*.py
+  python -m py_compile backend/services/*.py
   ```
 
 ### Manual Verification
-1. Re-build the Docker environment:
+1. Rebuild and launch the stack:
    ```bash
    docker-compose up --build -d
    ```
-2. Create dummy input files for validation:
-   - Text file (`dummy.txt`)
-   - PDF file (`dummy.pdf`)
-   - Mock audio/video files
-3. Test upload pipeline via cURL requests:
+2. Run schema initialization:
    ```bash
-   curl -X POST "http://localhost:8000/api/v1/upload" -F "file=@dummy.txt"
+   docker-compose exec backend python core/init_schema.py
    ```
-4. Confirm response body format:
-   ```json
-   {
-     "asset_id": "...",
-     "status": "processed",
-     "chunks_created": 3
-   }
+3. Run test ingestion:
+   ```bash
+   curl -X POST "http://localhost:8000/api/v1/upload" -F "file=@sample.txt"
    ```
-5. Inspect the database container tables to ensure that the asset rows are created and `asset_chunks` entries show correct chunk indices, contents, start/end timestamps, and `embedding = NULL`.
+4. Query Postgres to verify that chunks show correct 512-dimensional floating-point array embeddings:
+   ```sql
+   SELECT id, asset_id, chunk_index, start_time, end_time, array_length(embedding, 1) FROM asset_chunks;
+   ```
