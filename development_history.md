@@ -75,6 +75,21 @@ Build a synchronous file upload, validation, directory isolation, raw media prep
 
 ---
 
+## Phase 4: AI Model Integration Layer & Embedding Generation Pipeline
+*Timestamp: 2026-06-13T18:29:39+05:00*
+
+### Objectives
+Integrate deep learning models to generate 512-dimensional normalized embeddings for text chunks (BGE-M3), video frames (CLIP), and audio tracks (transcribed locally via Faster-Whisper and embedded via BGE-M3). Bulk update chunk records inside database transactions in batches.
+
+### Key Implementations
+*   **Model Manager**: Implemented `AIModelManager` singleton loading CLIP, Whisper, and BGE-M3 on demand on CPU with thread-safety locks.
+*   **Text Embedding Service**: Implemented `TextEmbeddingService` slicing BGE-M3 dense vectors to 512-dim and applying L2 normalization.
+*   **Audio Embedding Service**: Implemented `AudioEmbeddingService` running Whisper local audio transcription, mapping text segments and timestamps, and generating embeddings.
+*   **Video Embedding Service**: Implemented `VideoEmbeddingService` executing CLIP visual feature extractions on frame images.
+*   **Orchestration**: Implemented `ProcessingOrchestrator` linking raw chunks to AI models, performing batch DB updates in size 50 transaction blocks, and hooking triggers directly inside the API upload endpoint.
+
+---
+
 ## Git Commit History
 The repository was updated with incremental, logical commits representing developmental phases:
 
@@ -105,4 +120,7 @@ aaa60c4 feat(services): implement IngestionService orchestrating multi-modal pip
 e69dd74 docs: add future AI model pipeline, deployment compose instructions, and troubleshooting guides
 9facde7 docs: finalize Phase 3 task list checklist items
 ddea179 docs: finalize Phase 3 walkthrough guide covering ingestion services and APIs
+abfebb4 docs: update development history timeline with Phase 3 workflow details and complete commit log
+441ad8a feat(ai): implement AIModelManager singleton, Text/Audio/Video embedding pipelines, and ProcessingOrchestrator DB updater
 ```
+
