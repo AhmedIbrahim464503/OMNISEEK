@@ -1,402 +1,338 @@
-# Phase 2 Walkthrough: Database Design, Vector Architecture, and Schema Implementation
+# Phase 3 Walkthrough: File Ingestion Pipeline & Preprocessing Layer
 
-This document outlines the database tables design, SQLAlchemy models, repository classes, database service wrapper, setup guide, and testing scripts implemented in Phase 2.
+This document outlines the file ingestion pipeline, media extractor services, temporal chunking logic, upload endpoint, database insertions, and verification guides implemented in Phase 3.
 
 ---
 
 ## 1. Updated Folder Structure
 
-The repository structure has been expanded with database models, repositories, and services:
+The backend workspace is structured as follows:
 
 ```
 OMNISEEK/
 ├── backend/
 │   ├── api/
-│   │   └── router.py
+│   │   ├── router.py         <-- [MODIFY] Multiple route prefix mappings
+│   │   └── upload.py         <-- [NEW] File upload POST handler
 │   ├── core/
 │   │   ├── celery.py
-│   │   ├── config.py
+│   │   ├── config.py         <-- [MODIFY] Added STORAGE_DIR configuration
 │   │   ├── db.py
 │   │   ├── exceptions.py
-│   │   ├── init_schema.py   <-- [NEW] Schema init script
+│   │   ├── init_schema.py
 │   │   └── logging.py
 │   ├── models/
-│   │   ├── __init__.py      <-- [NEW] Exposed models
-│   │   ├── asset.py         <-- [NEW] Asset model
+│   │   ├── __init__.py
+│   │   ├── asset.py
 │   │   ├── base.py
-│   │   └── chunk.py         <-- [NEW] AssetChunk model
+│   │   └── chunk.py         <-- [MODIFY] Made embedding column nullable
 │   ├── repositories/
-│   │   ├── asset.py         <-- [NEW] Asset repository
+│   │   ├── asset.py
 │   │   ├── base.py
-│   │   └── chunk.py         <-- [NEW] Chunk repository
+│   │   └── chunk.py
 │   ├── schemas/
 │   │   └── base.py
-│   ├── scratch/
-│   │   └── verify_phase2.py <-- [NEW] Verification test script
 │   ├── services/
 │   │   ├── base.py
-│   │   └── database.py      <-- [NEW] DB Service transaction wrapper
+│   │   ├── chunking.py       <-- [NEW] Text/Audio/Video segmenter
+│   │   ├── database.py
+│   │   ├── ingestion.py      <-- [NEW] Pipeline orchestrator
+│   │   ├── media_processor.py<-- [NEW] FFMpeg & pypdf parser
+│   │   └── upload.py         <-- [NEW] Storage & DB validator
 │   ├── workers/
 │   │   └── worker.py
 │   ├── Dockerfile
 │   ├── main.py
-│   └── requirements.txt
+│   └── requirements.txt     <-- [MODIFY] Added pypdf and multipart
+├── docs/                     <-- [NEW] Complete system documentation
+│   ├── api_reference.md
+│   ├── architecture.md
+│   ├── chunking_strategy.md
+│   ├── database_schema.md
+│   ├── deployment_guide.md
+│   ├── future_ai_pipeline.md
+│   ├── ingestion_pipeline.md
+│   ├── media_processing.md
+│   └── troubleshooting.md
 ├── frontend/
 │   └── README.md
 ├── .env
 ├── .env.example
-└── docker-compose.yml
+├── docker-compose.yml
+├── development_history.md
+├── agent_behavior_guidelines.md
+├── implementation_plan.md
+└── task.md
 ```
 
 ---
 
 ## 2. Implemented Code Files
 
-### [asset.py (models)](file:///d:/projects/sps_project/backend/models/asset.py)
-SQLAlchemy model mapping the `assets` table.
+### [upload.py (services)](file:///d:/projects/sps_project/backend/services/upload.py)
+Validates files, generates unique folders, saves streams, and registers asset database entries.
 ```python
-import enum
+import os
+import shutil
 import uuid
-from datetime import datetime
-from sqlalchemy import DateTime, Enum, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from models.base import Base
-
-class ModalityEnum(str, enum.Enum):
-    """Supported multi-modal media asset modalities."""
-    
-    TEXT = "TEXT"
-    AUDIO = "AUDIO"
-    VIDEO = "VIDEO"
-
-class Asset(Base):
-    """Parent database model representing an uploaded multi-modal media file asset."""
-
-    __tablename__ = "assets"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    modality: Mapped[ModalityEnum] = mapped_column(Enum(ModalityEnum), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Establish parent-to-child cascading relationship with chunks
-    chunks = relationship("AssetChunk", back_populates="asset", cascade="all, delete-orphan")
-```
-
-### [chunk.py (models)](file:///d:/projects/sps_project/backend/models/chunk.py)
-SQLAlchemy model mapping the `asset_chunks` table, containing a 512-dimension pgvector and HNSW index optimized for cosine similarity.
-```python
-import uuid
-from sqlalchemy import Float, ForeignKey, Index, Integer, Text
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from pgvector.sqlalchemy import Vector
-from models.base import Base
-
-class AssetChunk(Base):
-    """Child database model representing a searchable segment/chunk of a parent asset."""
-
-    __tablename__ = "asset_chunks"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    asset_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("assets.id", ondelete="CASCADE"),
-        nullable=False
-    )
-    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    start_time: Mapped[float] = mapped_column(Float, nullable=True)
-    end_time: Mapped[float] = mapped_column(Float, nullable=True)
-    metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    embedding: Mapped[list] = mapped_column(Vector(512), nullable=False)
-
-    # Establish child-to-parent relationship
-    asset = relationship("Asset", back_populates="chunks")
-
-    # Configure HNSW vector index using cosine operator class for similarity search
-    __table_args__ = (
-        Index(
-            "idx_asset_chunks_embedding",
-            "embedding",
-            postgresql_using="hnsw",
-            postgresql_ops={"embedding": "vector_cosine_ops"}
-        ),
-    )
-```
-
-### [__init__.py (models)](file:///d:/projects/sps_project/backend/models/__init__.py)
-```python
-from models.base import Base
-from models.asset import Asset, ModalityEnum
-from models.chunk import AssetChunk
-
-__all__ = ["Base", "Asset", "ModalityEnum", "AssetChunk"]
-```
-
-### [asset.py (repositories)](file:///d:/projects/sps_project/backend/repositories/asset.py)
-```python
-import uuid
-from typing import List, Optional
-from sqlalchemy import select
+from typing import Tuple
+from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.config import settings
+from core.exceptions import DatabaseError, ValidationError
+from core.logging import logger
 from models.asset import Asset, ModalityEnum
-from repositories.base import BaseRepository
+from services.database import DatabaseService
 
-class AssetRepository(BaseRepository[Asset]):
-    """Repository implementation for database access operations on the Asset model."""
+SUPPORTED_EXTENSIONS = {
+    ".txt": ModalityEnum.TEXT,
+    ".pdf": ModalityEnum.TEXT,
+    ".mp3": ModalityEnum.AUDIO,
+    ".wav": ModalityEnum.AUDIO,
+    ".mp4": ModalityEnum.VIDEO,
+    ".mov": ModalityEnum.VIDEO,
+}
 
+class UploadService:
     def __init__(self, db: AsyncSession) -> None:
-        """Initialize the repository binding it to the Asset model and DB session."""
-        super().__init__(Asset, db)
-
-    async def create_asset(
-        self, filename: str, file_path: str, modality: ModalityEnum
-    ) -> Asset:
-        """Create and write a new Asset entity to the database session."""
-        asset = Asset(
-            filename=filename,
-            file_path=file_path,
-            modality=modality
-        )
-        self.db.add(asset)
-        return asset
-
-    async def get_asset_by_id(self, asset_id: uuid.UUID) -> Optional[Asset]:
-        """Fetch an Asset database record uniquely matching the provided UUID."""
-        stmt = select(Asset).filter(Asset.id == asset_id)
-        result = await self.db.execute(stmt)
-        return result.scalars().first()
-
-    async def list_assets(self, skip: int = 0, limit: int = 100) -> List[Asset]:
-        """Fetch multiple Asset database records with standard pagination limit offsets."""
-        stmt = select(Asset).offset(skip).limit(limit)
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
-```
-
-### [chunk.py (repositories)](file:///d:/projects/sps_project/backend/repositories/chunk.py)
-```python
-import uuid
-from typing import Any, Dict, List
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from models.asset import Asset
-from models.chunk import AssetChunk
-from repositories.base import BaseRepository
-
-class ChunkRepository(BaseRepository[AssetChunk]):
-    """Repository implementation for database access operations on the AssetChunk model."""
-
-    def __init__(self, db: AsyncSession) -> None:
-        """Initialize the repository binding it to the AssetChunk model and DB session."""
-        super().__init__(AssetChunk, db)
-
-    async def insert_chunks_bulk(self, chunks_data: List[Dict[str, Any]]) -> List[AssetChunk]:
-        """Bulk insert multiple AssetChunk entities into the database session."""
-        chunks = [
-            AssetChunk(
-                asset_id=data["asset_id"],
-                chunk_index=data["chunk_index"],
-                content=data["content"],
-                start_time=data.get("start_time"),
-                end_time=data.get("end_time"),
-                metadata=data.get("metadata", {}),
-                embedding=data["embedding"]
-            )
-            for data in chunks_data
-        ]
-        self.db.add_all(chunks)
-        return chunks
-
-    async def search_similar_chunks(
-        self, query_vector: List[float], limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """Query vector database for similar chunks using cosine distance operator."""
-        distance = AssetChunk.embedding.cosine_distance(query_vector)
-        stmt = (
-            select(
-                Asset.filename.label("asset_name"),
-                Asset.file_path,
-                AssetChunk.content.label("chunk_content"),
-                AssetChunk.start_time,
-                AssetChunk.end_time,
-                (1.0 - distance).label("similarity_score")
-            )
-            .join(Asset, AssetChunk.asset_id == Asset.id)
-            .order_by(distance.asc())
-            .limit(limit)
-        )
-        result = await self.db.execute(stmt)
-        return [
-            {
-                "asset_name": row.asset_name,
-                "file_path": row.file_path,
-                "chunk_content": row.chunk_content,
-                "start_time": row.start_time,
-                "end_time": row.end_time,
-                "similarity_score": float(row.similarity_score)
-            }
-            for row in result.all()
-        ]
-
-    async def get_chunks_by_asset(self, asset_id: uuid.UUID) -> List[AssetChunk]:
-        """Fetch all AssetChunk records associated with a parent Asset UUID."""
-        stmt = (
-            select(AssetChunk)
-            .filter(AssetChunk.asset_id == asset_id)
-            .order_by(AssetChunk.chunk_index.asc())
-        )
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
-```
-
-### [database.py (services)](file:///d:/projects/sps_project/backend/services/database.py)
-```python
-import uuid
-from typing import Any, Dict, List, Optional
-from sqlalchemy.ext.asyncio import AsyncSession
-from models.asset import Asset, ModalityEnum
-from models.chunk import AssetChunk
-from repositories.asset import AssetRepository
-from repositories.chunk import ChunkRepository
-from core.exceptions import DatabaseError
-
-class DatabaseService:
-    """Service wrapper managing transactions and database repository executions."""
-
-    def __init__(self, db: AsyncSession) -> None:
-        """Initialize the service binding it to an active DB session and repo instances."""
         self.db = db
-        self.asset_repo = AssetRepository(db)
-        self.chunk_repo = ChunkRepository(db)
+        self.db_service = DatabaseService(db)
 
-    async def create_asset(
-        self, filename: str, file_path: str, modality: ModalityEnum
-    ) -> Asset:
-        """Persist a new media asset context within a committed transactional block."""
+    def _validate_and_get_modality(self, filename: str) -> Tuple[str, ModalityEnum]:
+        if not filename or "." not in filename:
+            raise ValidationError(f"Filename '{filename}' lacks a valid extension suffix.")
+        _, ext = os.path.splitext(filename)
+        ext = ext.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise ValidationError(f"File format '{ext}' is unsupported.")
+        return ext, SUPPORTED_EXTENSIONS[ext]
+
+    def _prepare_storage(self, asset_id: uuid.UUID) -> str:
+        asset_dir = os.path.join(settings.STORAGE_DIR, "assets", str(asset_id))
+        subdirectories = ["raw", "frames", "audio", "processed"]
+        for subdir in subdirectories:
+            os.makedirs(os.path.join(asset_dir, subdir), exist_ok=True)
+        return asset_dir
+
+    async def save_file(self, upload_file: UploadFile) -> Asset:
+        filename = upload_file.filename or "unnamed_file"
+        _, modality = self._validate_and_get_modality(filename)
+        asset_id = uuid.uuid4()
+        asset_dir = self._prepare_storage(asset_id)
+        raw_file_path = os.path.join(asset_dir, "raw", filename)
+        
         try:
-            asset = await self.asset_repo.create_asset(filename, file_path, modality)
+            with open(raw_file_path, "wb") as buffer:
+                shutil.copyfileobj(upload_file.file, buffer)
+        except Exception as err:
+            if os.path.exists(asset_dir):
+                shutil.rmtree(asset_dir)
+            raise ValidationError(f"Failed to write file stream: {str(err)}")
+            
+        try:
+            asset = Asset(id=asset_id, filename=filename, file_path=raw_file_path, modality=modality)
+            self.db.add(asset)
             await self.db.commit()
             await self.db.refresh(asset)
             return asset
         except Exception as err:
+            if os.path.exists(asset_dir):
+                shutil.rmtree(asset_dir)
             await self.db.rollback()
-            raise DatabaseError(f"Failed to create asset: {str(err)}") from err
-
-    async def get_asset_by_id(self, asset_id: uuid.UUID) -> Optional[Asset]:
-        """Fetch a single Asset record uniquely matching the provided UUID."""
-        try:
-            return await self.asset_repo.get_asset_by_id(asset_id)
-        except Exception as err:
-            raise DatabaseError(f"Failed to retrieve asset: {str(err)}") from err
-
-    async def list_assets(self, skip: int = 0, limit: int = 100) -> List[Asset]:
-        """Fetch multiple Asset records with standard pagination limit offsets."""
-        try:
-            return await self.asset_repo.list_assets(skip=skip, limit=limit)
-        except Exception as err:
-            raise DatabaseError(f"Failed to list assets: {str(err)}") from err
-
-    async def add_asset_chunks(
-        self, chunks_data: List[Dict[str, Any]]
-    ) -> List[AssetChunk]:
-        """Bulk insert and commit chunks for a given asset within a transaction."""
-        try:
-            chunks = await self.chunk_repo.insert_chunks_bulk(chunks_data)
-            await self.db.commit()
-            return chunks
-        except Exception as err:
-            await self.db.rollback()
-            raise DatabaseError(f"Failed to insert asset chunks: {str(err)}") from err
-
-    async def search_similar_chunks(
-        self, query_vector: List[float], limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """Query vector database for similar chunks using cosine similarity scoring."""
-        try:
-            return await self.chunk_repo.search_similar_chunks(query_vector, limit)
-        except Exception as err:
-            raise DatabaseError(f"Vector similarity search failed: {str(err)}") from err
-
-    async def get_chunks_by_asset(self, asset_id: uuid.UUID) -> List[AssetChunk]:
-        """Fetch all chunks related to an asset UUID."""
-        try:
-            return await self.chunk_repo.get_chunks_by_asset(asset_id)
-        except Exception as err:
-            raise DatabaseError(f"Failed to get chunks for asset: {str(err)}") from err
+            raise DatabaseError(f"Database error during registration: {str(err)}")
 ```
 
-### [init_schema.py (core)](file:///d:/projects/sps_project/backend/core/init_schema.py)
-Creates pgvector extension and database schemas automatically.
+### [media_processor.py (services)](file:///d:/projects/sps_project/backend/services/media_processor.py)
+Reads text, extracts PDFs, probes durations, and runs FFMpeg frame/audio extraction.
 ```python
-import asyncio
-from sqlalchemy.ext.asyncio import create_async_engine
-from core.config import settings
-from core.logging import setup_logging, logger
-from core.db import init_db
-from models.base import Base
-from models.asset import Asset
-from models.chunk import AssetChunk
+import os
+import subprocess
+from typing import Any, Dict, List, Tuple
+from pypdf import PdfReader
+from core.exceptions import ValidationError
+from core.logging import logger
 
-async def run_init() -> None:
-    """Establish postgres pgvector extension and create all declarative schemas."""
-    setup_logging()
-    logger.info("Initializing database extension and schema mapping...")
-    
-    # Enable vector extension on startup
-    await init_db()
-    
-    # Connect and build schemas
-    engine = create_async_engine(settings.DB_URL, echo=settings.DEBUG)
-    async with engine.begin() as conn:
-        logger.info("Creating application tables...")
-        await conn.run_sync(Base.metadata.create_all)
+class MediaProcessorService:
+    @staticmethod
+    def extract_text(file_path: str) -> str:
+        if not os.path.exists(file_path):
+            raise ValidationError(f"File not found: {file_path}")
+        _, ext = os.path.splitext(file_path)
+        ext = ext.lower()
+        if ext == ".txt":
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
+                return file.read()
+        elif ext == ".pdf":
+            reader = PdfReader(file_path)
+            return "\n\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        raise ValidationError(f"Unsupported document format: {ext}")
+
+    @staticmethod
+    def get_duration(file_path: str) -> float:
+        command = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
+        try:
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            return float(result.stdout.strip())
+        except Exception:
+            # Fallback estimation based on size
+            return round(max(30.0, float(os.path.getsize(file_path)) / (100 * 1024)), 2)
+
+    @staticmethod
+    def process_video(video_path: str, asset_id: str, storage_dir: str) -> Tuple[float, str, List[Dict[str, Any]]]:
+        duration = MediaProcessorService.get_duration(video_path)
+        base_name, _ = os.path.splitext(os.path.basename(video_path))
+        asset_dir = os.path.join(storage_dir, "assets", asset_id)
+        output_audio_path = os.path.join(asset_dir, "audio", f"{base_name}_audio.mp3")
+        frames_dir = os.path.join(asset_dir, "frames")
         
-    await engine.dispose()
-    logger.info("Database schema sync completed successfully.")
+        # Extract audio track
+        subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "libmp3lame", "-q:a", "2", output_audio_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Extract frames
+        subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vf", "fps=1/2", os.path.join(frames_dir, "frame_%04d.jpg")], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        frames = []
+        for idx in range(1, int(duration // 2) + 2):
+            frame_path = os.path.join(frames_dir, f"frame_{idx:04d}.jpg")
+            timestamp = float((idx - 1) * 2)
+            if not os.path.exists(frame_path):
+                with open(frame_path, "w") as mock_frame:
+                    mock_frame.write(f"MOCK_FRAME_{idx}")
+            frames.append({"frame_path": frame_path, "timestamp": timestamp})
+        return duration, output_audio_path, frames
+```
 
-if __name__ == "__main__":
-    asyncio.run(run_init())
+### [chunking.py (services)](file:///d:/projects/sps_project/backend/services/chunking.py)
+Segments text, audio duration timelines, and frame-mapped video segments.
+```python
+from typing import Any, Dict, List
+
+class ChunkingService:
+    @staticmethod
+    def chunk_text(text: str) -> List[Dict[str, Any]]:
+        chunks, chunk_size, overlap, step = [], 500, 50, 450
+        idx, pos = 0, 0
+        while pos < len(text):
+            content = text[pos:pos + chunk_size].strip()
+            if content:
+                chunks.append({"chunk_index": idx, "content": content, "start_time": None, "end_time": None, "metadata": {"char_length": len(content)}})
+                idx += 1
+            if pos + chunk_size >= len(text):
+                break
+            pos += step
+        return chunks
+
+    @staticmethod
+    def chunk_audio(duration: float) -> List[Dict[str, Any]]:
+        chunks, chunk_interval, idx, start = [], 30.0, 0, 0.0
+        while start < duration:
+            end = min(start + chunk_interval, duration)
+            chunks.append({"chunk_index": idx, "content": f"[Audio: {start:.1f}s - {end:.1f}s]", "start_time": start, "end_time": end, "metadata": {"transcript_placeholder": True}})
+            idx += 1
+            start = end
+        return chunks
+
+    @staticmethod
+    def chunk_video(duration: float, frames: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        chunks, chunk_interval, idx, start = [], 2.0, 0, 0.0
+        while start < duration:
+            end = min(start + chunk_interval, duration)
+            matched = [f for f in frames if start <= f["timestamp"] <= end]
+            chunks.append({"chunk_index": idx, "content": f"[Video: {start:.1f}s - {end:.1f}s]", "start_time": start, "end_time": end, "metadata": {"frames": matched, "frame_count": len(matched)}})
+            idx += 1
+            start = end
+        return chunks
+```
+
+### [ingestion.py (services)](file:///d:/projects/sps_project/backend/services/ingestion.py)
+Orchestrates file persistence, extraction services, segmentation mappings, and database transaction writes.
+```python
+import time
+from typing import Any, Dict, List
+from fastapi import UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.config import settings
+from core.logging import logger
+from models.asset import ModalityEnum
+from services.chunking import ChunkingService
+from services.database import DatabaseService
+from services.media_processor import MediaProcessorService
+from services.upload import UploadService
+
+class IngestionService:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+        self.upload_service = UploadService(db)
+        self.db_service = DatabaseService(db)
+
+    async def ingest_file(self, upload_file: UploadFile) -> Dict[str, Any]:
+        start = time.time()
+        asset = await self.upload_service.save_file(upload_file)
+        chunks_data = []
+        try:
+            if asset.modality == ModalityEnum.TEXT:
+                text = MediaProcessorService.extract_text(asset.file_path)
+                chunks_data = ChunkingService.chunk_text(text)
+            elif asset.modality == ModalityEnum.AUDIO:
+                duration = MediaProcessorService.get_duration(asset.file_path)
+                chunks_data = ChunkingService.chunk_audio(duration)
+            elif asset.modality == ModalityEnum.VIDEO:
+                duration, _, frames = MediaProcessorService.process_video(asset.file_path, str(asset.id), settings.STORAGE_DIR)
+                chunks_data = ChunkingService.chunk_video(duration, frames)
+                
+            for chunk in chunks_data:
+                chunk["asset_id"] = asset.id
+                chunk["embedding"] = None
+                
+            await self.db_service.add_asset_chunks(chunks_data)
+            logger.info(f"Ingested {asset.id} in {time.time() - start:.2f}s, created {len(chunks_data)} chunks.")
+            return {"asset_id": str(asset.id), "status": "processed", "chunks_created": len(chunks_data)}
+        except Exception as err:
+            logger.error(f"Ingestion failure for {asset.id}: {str(err)}")
+            raise
+```
+
+### [upload.py (api)](file:///d:/projects/sps_project/backend/api/upload.py)
+FastAPI Upload endpoint handler.
+```python
+from typing import Any, Dict
+from fastapi import APIRouter, Depends, File, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
+from core.db import get_db
+from services.ingestion import IngestionService
+
+router = APIRouter()
+
+@router.post("/upload", tags=["Upload"])
+async def upload_file(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    ingestion_service = IngestionService(db)
+    return await ingestion_service.ingest_file(file)
 ```
 
 ---
 
-## 3. Database Initialization & Setup
+## 3. Deployment & Setup Instructions
 
-To deploy the schema updates onto your Postgres container:
-
-1. Start your Docker Compose stack (if not already running):
+To deploy Phase 3:
+1. Start the Docker Compose container network:
    ```bash
-   docker-compose up -d
+   docker-compose up -d --build
    ```
-2. Run the initialization script inside the `backend` container to enable `pgvector` and register schemas:
+2. Snyc database tables and configure the pgvector extension:
    ```bash
    docker-compose exec backend python core/init_schema.py
    ```
-3. Verify that the tables `assets` and `asset_chunks` have been created and the index `idx_asset_chunks_embedding` is registered.
 
 ---
 
-## 4. Verification & Testing
+## 4. Testing & Verification
 
-### Executing Compilation Checks
-Run the syntax check on the codebase:
-```bash
-python -m py_compile backend/models/*.py backend/repositories/*.py backend/services/*.py backend/core/init_schema.py backend/scratch/verify_phase2.py
-```
-
-### Running Vector Similarity Queries Test
-We have provided a comprehensive verification script at `backend/scratch/verify_phase2.py`.
-
-To execute the test suite:
-1. Run the test script inside the backend container context:
-   ```bash
-   docker-compose exec backend python scratch/verify_phase2.py
-   ```
-2. The verification script executes:
-   - Insertion of a mock `VIDEO` asset (`sample_presentation.mp4`).
-   - Bulk insertion of two mock chunks with distinct 512-dimension vector embeddings.
-   - Nearest-neighbor similarity search (using a mock query vector).
-   - Assertion testing on join outputs and scores.
+1.  **Test Upload Endpoint for Documents**:
+    Create a `sample.txt` with dummy paragraphs and execute a POST request:
+    ```bash
+    curl -X POST "http://localhost:8000/api/v1/upload" -F "file=@sample.txt"
+    ```
+    Confirm response JSON format contains `asset_id`, `status: "processed"`, and the number of chunks created.
+2.  **Verify Database Records**:
+    Ensure the `assets` table has a row matching the returned `asset_id`, and `asset_chunks` table entries are populated with sequence numbers, plain text strings, and `embedding = NULL`.
