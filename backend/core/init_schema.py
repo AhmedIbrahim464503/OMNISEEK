@@ -7,6 +7,7 @@ from models.base import Base
 # Import all models to ensure they are registered with the Base.metadata
 from models.asset import Asset
 from models.chunk import AssetChunk
+from models.search_log import SearchLog
 
 async def run_init() -> None:
     """Establish postgres pgvector extension and create all declarative schemas."""
