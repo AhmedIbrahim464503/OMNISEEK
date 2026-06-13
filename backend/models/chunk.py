@@ -20,7 +20,7 @@ class AssetChunk(Base):
     start_time: Mapped[float] = mapped_column(Float, nullable=True)
     end_time: Mapped[float] = mapped_column(Float, nullable=True)
     metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    embedding: Mapped[list] = mapped_column(Vector(512), nullable=False)
+    embedding: Mapped[list] = mapped_column(Vector(512), nullable=True)
 
     # Establish child-to-parent relationship
     asset = relationship("Asset", back_populates="chunks")
