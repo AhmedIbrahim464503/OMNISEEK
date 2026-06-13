@@ -59,8 +59,24 @@ Implement database schemas, repository abstractions, similarity vector search lo
 
 ---
 
+## Phase 3: File Ingestion Pipeline & Preprocessing Layer
+*Timestamp: 2026-06-13T18:15:40+05:00*
+
+### Objectives
+Build a synchronous file upload, validation, directory isolation, raw media preprocessing (using ffmpeg/ffprobe and pypdf), and chunk metadata generation pipeline. Add comprehensive systems documentation inside the `/docs` directory.
+
+### Key Implementations
+*   **Upload Service**: Implemented `UploadService` validating extensions, isolating raw streams under `/storage/assets/{asset_id}/raw/`, and logging metrics.
+*   **Media Processing Service**: Implemented `MediaProcessorService` reading text files, extracting PDF strings page-by-page, and invoking FFMpeg subprocess calls for frame and audio extraction.
+*   **Chunking Service**: Implemented `ChunkingService` managing 500-char sliding overlaps (text), 30s segments (audio), and 2s frame metadata mappings (video).
+*   **Orchestration**: Implemented `IngestionService` connecting components together and saving metadata into the database with `embedding = NULL`.
+*   **API Router & upload Endpoint**: Registered `POST /api/upload` (and `/api/v1/upload`) file upload endpoints.
+*   **Documentation Suite**: Created 9 markdown reference files inside the `docs/` folder.
+
+---
+
 ## Git Commit History
-The repository was updated with 10 incremental, logical commits representing structural phases:
+The repository was updated with incremental, logical commits representing developmental phases:
 
 ```git
 6c3892a feat(infra): add .gitignore and environment variables template
@@ -74,4 +90,19 @@ c2ecfc1 feat(db): implement Asset and AssetChunk schemas with 512-dim pgvector a
 0afa3cd feat(repositories): implement AssetRepository and ChunkRepository with bulk insert and cosine distance vector search
 67d7c30 feat(services): add DatabaseService transaction wrapper, schema init, and verification test script
 9f09b59 docs: add Phase 2 design, task list, and walkthrough markdown guides
+a97925e docs: add development history timeline and agent behavior guidelines
+87e2a5b docs: update implementation plan for Phase 3 ingestion pipeline
+7bc73dc feat(infra): update configuration settings and requirements with pdf and upload dependencies
+9c7a787 feat(services): implement UploadService validating file types and preparing storage subdirs
+c45ea67 feat(services): implement MediaProcessorService handling text parsing and ffmpeg/ffprobe subprocess extraction
+c9b7dc7 feat(services): implement ChunkingService managing overlap text slicing, temporal audio, and frame-mapped video segments
+bb111da fix(db): make embedding column nullable in AssetChunk model for Phase 3 ingestion support
+aaa60c4 feat(services): implement IngestionService orchestrating multi-modal pipeline execution and transaction writes
+29a6401 feat(api): implement upload endpoint POST /api/upload and register under multiple route prefixes
+60a3ef3 docs: add architecture overview and ingestion pipeline execution flow guides
+4e1ffe2 docs: add database schema layout and API reference endpoints guides
+72d9db0 docs: add media processing specifications and chunking strategy segmentation rules
+e69dd74 docs: add future AI model pipeline, deployment compose instructions, and troubleshooting guides
+9facde7 docs: finalize Phase 3 task list checklist items
+ddea179 docs: finalize Phase 3 walkthrough guide covering ingestion services and APIs
 ```
