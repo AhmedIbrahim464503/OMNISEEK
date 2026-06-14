@@ -161,4 +161,39 @@ Upgrade the semantic search engine to an enterprise-grade retrieval system utili
 *   **Search API Handler**: Extended `GET /api/search` parameters to parse execution profiles, registered `POST /api/search/benchmark` endpoint, and exposed analytics via `GET /api/search/dashboard`.
 *   **Testing & Verification**: Created `backend/tests/test_search.py` containing 10 integration and unit tests, achieving 100% pass status under mock framework environment.
 
+---
 
+## Phase 7: Frontend Application Integration
+*Timestamp: 2026-06-14T13:14:00+05:00*
+
+### Objectives
+Build a modern, professional, enterprise-grade Next.js App Router frontend dashboard and search console demonstrating ingestion uploads, cross-modal semantic query retrieval, explainability details, latency metrics telemetry, and interactive Recharts graphs.
+
+### Key Implementations
+*   **Next.js Client & Scaffolding**: Bootstrap Next.js 14+ App Router TypeScript template inside Docker Compose mapping port 3000 to the host.
+*   **Global Stores**: Integrated Zustand with persist middleware to cache settings sliders, query filters, search history, visual themes, and recent ingestion records.
+*   **React Query Client Hooks**: Wrapped API fetch requests in TanStack Query hooks mapping `/api/search`, `/api/upload`, and `/api/search/dashboard` routes.
+*   **Search Console UI & Detail Panel**: Built sliders controlling strategy profiles (Fast vs Balanced vs Accurate), candidate limits, and minimum score thresholds. Added side drawer mapping score breakdowns (keyword, semantic, rerank weights) and plain-text rationales.
+*   **Temporal Playback sub-players**: Built custom media player controllers (`VideoPlayer`, `AudioPlayer`, `DocumentViewer`) utilizing programmatic references to automatically seek to chunk `start_time` offset positions.
+*   **Telemetry Analytics Dashboard**: Designed and generated interactive Recharts stacked Area charts and donut Pie charts visualizing throughput latencies and chunk distributions.
+
+---
+
+## Phase 8: Production Hardening, Security & Observability
+*Timestamp: 2026-06-14T13:38:00+05:00*
+
+### Objectives
+Transform the OmniSeek prototype into an enterprise-grade, secure, observable, reliable, and deployable production application with rate limits, JWT permissions, background queues, caching, telemetry, automated backups, and CI pipelines.
+
+### Key Implementations
+*   **Database Models**: Created `User` and `TaskStatus` database schemas and updated startup schemas synchronization.
+*   **Auth Services**: Built pure-python JWT access tokens generator and PBKDF2-HMAC-SHA256 password hashing. Integrated FastAPI router auth routes and RBAC endpoint dependencies.
+*   **Celery Queue Refactoring**: Setup Celery exponential retry backoffs, task timeouts, soft limits, and DatabaseTrackedTask base class updating PostgreSQL statuses (PENDING, STARTED, SUCCESS, FAILURE, RETRY).
+*   **API Security & Rate Limits**: Enforced security headers middleware (CSP, XSS, Frame Options, HSTS) and fixed-window Redis token bucket rate limit check dependencies.
+*   **Redis Caching**: Wrapped query result caches in CacheService, applying 5-minute TTL expirations and invalidation pattern wipes on file uploads.
+*   **Structured Telemetry Metrics Exporter**: Created thread-safe MetricsCollector registering API durations, DB speeds, and Celery tasks, exposing them at a Prometheus scrapable `/metrics` FastAPI endpoint.
+*   **JSON Tracing loggers**: Injected ContextVar tracers automatically mapping request IDs and trace IDs in JSON formatter logs.
+*   **Diagnostics Health probes**: Registered `/health/live`, `/health/ready`, and `/health/deep` probes checking database, redis, celery, storage path, and model manager.
+*   **CI/CD Pipeline & Code Quality**: Configured GitHub Actions lint checks, type tests, and unit coverage. Generated pyproject.toml and pre-commit configurations for Black, Ruff, and isort.
+*   **Postgres Backup utility**: Wrote PowerShell scripts automating db container dumps, copies, and restores.
+*   **Testing & Documentation**: Added 9 new unit tests verifying authentication, rate limits, caching, and Prometheus endpoints. Created 13 Markdown production guides inside the `docs/` folder.

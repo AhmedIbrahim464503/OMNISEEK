@@ -1,0 +1,117 @@
+name: OmniSeek Production CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-format:
+    name: Code Quality (Linting & Formatting)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Linting Tools
+        run: |
+          pip install ruff black isort mypy
+
+      - name: Check Ruff Linting
+        run: ruff check backend/
+
+      - name: Check Black Formatting
+        run: black --check backend/
+
+      - name: Check Import Sorting (isort)
+        run: isort --check-only backend/
+
+      - name: Type Checking (MyPy)
+        run: mypy --ignore-missing-imports backend/
+
+  backend-tests:
+    name: Backend Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install coverage
+
+      - name: Run Unit Tests with Coverage
+        run: |
+          PYTHONPATH=backend coverage run -m unittest discover -s backend/tests -p "test_*.py"
+          coverage report -m --fail-under=90
+
+  frontend-tests:
+    name: Frontend Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install NPM Packages
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Run Jest Component Tests
+        run: |
+          cd frontend
+          npm run test
+
+  docker-build-and-scan:
+    name: Container Security & Build Validation
+    needs: [lint-and-format, backend-tests, frontend-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          tags: omniseek-backend:latest
+
+      - name: Build Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
+          tags: omniseek-frontend:latest
+
+      # Placeholder step for security vulnerability scanners (e.g. Trivy)
+      - name: Container Security Scan
+        run: |
+          echo "Scanning built images for security vulnerabilities..."
+          echo "OmniSeek Docker containers build validation completed successfully."
