@@ -20,7 +20,8 @@ import {
   Play,
   Settings2,
   FileCode,
-  CornerDownRight
+  CornerDownRight,
+  Loader2
 } from 'lucide-react';
 
 export default function SearchPage() {

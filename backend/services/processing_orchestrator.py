@@ -86,7 +86,7 @@ class ProcessingOrchestrator:
                 # 1. Update visual frame chunks (Phase 3) using CLIP embeddings
                 visual_batch = []
                 for chunk in raw_chunks:
-                    frames_metadata = chunk.metadata.get("frames", [])
+                    frames_metadata = chunk.chunk_metadata.get("frames", [])
                     if not frames_metadata:
                         continue
                     # Embed the first frame in the interval as visual representative
@@ -112,7 +112,21 @@ class ProcessingOrchestrator:
                     f"{base_name}_audio.mp3"
                 )
                 
+                # Check if audio path exists and is not a mock placeholder (which is a 36-byte text file)
+                is_valid_audio = False
                 if os.path.exists(audio_path):
+                    if os.path.getsize(audio_path) > 1000:
+                        is_valid_audio = True
+                    else:
+                        try:
+                            with open(audio_path, "r", errors="ignore") as f:
+                                content = f.read(100)
+                                if "MOCK_DEMUXED_AUDIO_TRACK_PLACEHOLDER" not in content:
+                                    is_valid_audio = True
+                        except Exception:
+                            pass
+
+                if is_valid_audio:
                     logger.info("Transcribing demuxed video audio track using Whisper...")
                     audio_chunks = AudioEmbeddingService.process_audio(audio_path)
                     
@@ -126,6 +140,8 @@ class ProcessingOrchestrator:
                         
                     await db_service.add_asset_chunks(audio_chunks)
                     chunks_updated += len(audio_chunks)
+                else:
+                    logger.warning(f"Audio track for video {asset_id} is missing or is a mock placeholder. Skipping Whisper transcription.")
                     
             await self.db.commit()
             logger.info(

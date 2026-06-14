@@ -64,7 +64,7 @@ class AIModelManager:
                 raise
 
     def load_bge_m3(self) -> None:
-        """Load BAAI/bge-m3 sentence transformer model on CPU memory."""
+        """Load sentence-transformers/all-MiniLM-L6-v2 model on CPU memory."""
         if self._bge_m3_model is not None:
             return
             
@@ -73,9 +73,9 @@ class AIModelManager:
                 return
             try:
                 from sentence_transformers import SentenceTransformer
-                logger.info("Loading BAAI/bge-m3 sentence transformer...")
-                self._bge_m3_model = SentenceTransformer("BAAI/bge-m3", device="cpu")
-                logger.info("BGE-M3 loaded successfully.")
+                logger.info("Loading sentence-transformers/all-MiniLM-L6-v2...")
+                self._bge_m3_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
+                logger.info("all-MiniLM-L6-v2 loaded successfully.")
             except Exception as err:
                 logger.error(f"BGE-M3 initialization failed: {str(err)}")
                 raise
@@ -105,7 +105,7 @@ class AIModelManager:
         return self._bge_m3_model
 
     def load_reranker(self) -> None:
-        """Load BAAI/bge-reranker-base cross-encoder for semantic score refinement."""
+        """Load cross-encoder/ms-marco-MiniLM-L-6-v2 cross-encoder for semantic score refinement."""
         if self._reranker_model is not None:
             return
             
@@ -114,8 +114,8 @@ class AIModelManager:
                 return
             try:
                 from sentence_transformers import CrossEncoder
-                logger.info("Loading BAAI/bge-reranker-base cross-encoder...")
-                self._reranker_model = CrossEncoder("BAAI/bge-reranker-base", device="cpu")
+                logger.info("Loading cross-encoder/ms-marco-MiniLM-L-6-v2...")
+                self._reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", device="cpu")
                 logger.info("Reranker model loaded successfully.")
             except Exception as err:
                 logger.error(f"Reranker model initialization failed: {str(err)}")

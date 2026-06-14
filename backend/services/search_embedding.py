@@ -19,11 +19,11 @@ class SearchEmbeddingService:
             model_manager = AIModelManager()
             model = model_manager.bge_m3_model
             
-            # Generate raw dense embedding (1024 dimensions for BGE-M3)
-            embedding_1024 = model.encode(query, convert_to_numpy=True)
+            # Generate raw dense embedding (384 dimensions for all-MiniLM-L6-v2)
+            embedding_384 = model.encode(query, convert_to_numpy=True)
             
-            # Truncate/slice to 512 dimensions to match the asset_chunks.embedding constraint
-            embedding_512 = embedding_1024[:512]
+            # Pad with zeros to 512 dimensions to conform to pgvector schema constraints
+            embedding_512 = np.pad(embedding_384, (0, 128), 'constant')
             
             # Normalize vector if required (cosine similarity requires normalized vectors)
             if normalize:

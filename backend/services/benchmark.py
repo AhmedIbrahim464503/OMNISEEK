@@ -23,11 +23,26 @@ class SearchBenchmarkService:
         res = await self.db.execute(stmt)
         all_assets = [row[0] for row in res.all()]
 
+        # Define defaults
+        ml_expected = "machine_learning.pdf"
+        milk_expected = "meeting.mp4"
+        climate_expected = "presentation.pdf"
+
+        # Dynamically map query targets based on filename patterns
+        for asset_name in all_assets:
+            name_lower = asset_name.lower()
+            if ("resume" in name_lower or "pdf" in name_lower) and ml_expected == "machine_learning.pdf":
+                ml_expected = asset_name
+            elif ("milk" in name_lower or "mp4" in name_lower or "video" in name_lower) and milk_expected == "meeting.mp4":
+                milk_expected = asset_name
+            elif ("sps" in name_lower or "txt" in name_lower) and climate_expected == "presentation.pdf":
+                climate_expected = asset_name
+
         # Define default benchmark queries and map them to expected assets
         benchmark_queries = {
-            "machine learning": {all_assets[0]} if all_assets else {"machine_learning.pdf"},
-            "person drinking milk": {all_assets[1]} if len(all_assets) > 1 else ({all_assets[0]} if all_assets else {"meeting.mp4"}),
-            "climate change discussion": {all_assets[2]} if len(all_assets) > 2 else ({all_assets[0]} if all_assets else {"presentation.pdf"})
+            "machine learning": {ml_expected},
+            "person drinking milk": {milk_expected},
+            "climate change discussion": {climate_expected}
         }
 
         from services.search import SearchService

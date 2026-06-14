@@ -86,6 +86,7 @@ class ResultAggregator:
         for item in aggregated:
             if item["score"] >= quality_threshold:
                 final_results.append({
+                    "chunk_id": str(item["chunk_id"]) if item.get("chunk_id") else None,
                     "asset_id": item["asset_id"],
                     "asset_name": item["asset_name"],
                     "modality": item["modality"],

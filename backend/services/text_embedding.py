@@ -15,13 +15,13 @@ class TextEmbeddingService:
         model_manager = AIModelManager()
         model = model_manager.bge_m3_model
         
-        # Compute dense embeddings from sentence-transformers
-        embedding_1024 = model.encode(text, convert_to_numpy=True)
+        # Compute dense embeddings from sentence-transformers (yields 384 dimensions)
+        embedding_384 = model.encode(text, convert_to_numpy=True)
         
-        # Truncate to first 512 dimensions to conform to pgvector schema constraints
-        embedding_512 = embedding_1024[:512]
+        # Pad with zeros to 512 dimensions to conform to pgvector schema constraints
+        embedding_512 = np.pad(embedding_384, (0, 128), 'constant')
         
-        # Perform L2 normalization on the truncated representation
+        # Perform L2 normalization on the padded representation
         norm = np.linalg.norm(embedding_512)
         if norm > 0:
             embedding_512 = embedding_512 / norm

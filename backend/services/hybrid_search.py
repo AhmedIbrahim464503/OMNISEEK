@@ -21,19 +21,16 @@ class HybridSearchService:
         Retrieves candidates from both vector search and FTS keyword search,
         then merges candidates using a weighted score fusion formula.
         """
-        # Run both searches in parallel using asyncio.gather for optimal latency
-        vector_task = self.repository.search_similar_chunks(
+        vector_results = await self.repository.search_similar_chunks(
             query_vector=query_vector,
             limit=limit,
             modality=modality
         )
-        keyword_task = self.repository.search_keyword_chunks(
+        keyword_results = await self.repository.search_keyword_chunks(
             query_text=query_text,
             limit=limit,
             modality=modality
         )
-
-        vector_results, keyword_results = await asyncio.gather(vector_task, keyword_task)
 
         # Merge candidate pools
         merged_candidates: Dict[Any, Dict[str, Any]] = {}

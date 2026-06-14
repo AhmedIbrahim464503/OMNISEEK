@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     
     DB_URL: str
     REDIS_URL: str
+    STORAGE_DIR: str = "storage"
     
     CORS_ORIGINS: Union[str, List[str]] = ["http://localhost:3000", "http://localhost:8000"]
     

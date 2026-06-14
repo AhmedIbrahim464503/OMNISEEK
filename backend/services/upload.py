@@ -1,6 +1,7 @@
 import os
 import shutil
 import uuid
+from sqlalchemy import select
 from typing import Tuple
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,24 @@ class UploadService:
         filename = upload_file.filename or "unnamed_file"
         _, modality = self._validate_and_get_modality(filename)
         
+        # Deduplication: remove existing assets with the same filename
+        try:
+            stmt = select(Asset).filter(Asset.filename == filename)
+            result = await self.db.execute(stmt)
+            existing_assets = result.scalars().all()
+            for existing_asset in existing_assets:
+                logger.info(f"Removing duplicate asset '{filename}' with ID {existing_asset.id} before new ingestion.")
+                # Delete files on disk
+                existing_dir = os.path.join(settings.STORAGE_DIR, "assets", str(existing_asset.id))
+                if os.path.exists(existing_dir):
+                    shutil.rmtree(existing_dir)
+                # Delete DB record (will cascade-delete chunks)
+                await self.db.delete(existing_asset)
+            if existing_assets:
+                await self.db.flush()
+        except Exception as err:
+            logger.warning(f"Failed to clear duplicate assets for '{filename}': {str(err)}")
+
         # Pre-assign asset ID to synchronize path naming
         asset_id = uuid.uuid4()
         asset_dir = self._prepare_storage(asset_id)

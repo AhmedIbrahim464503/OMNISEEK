@@ -14,3 +14,15 @@ ENV/
 # System specific
 .DS_Store
 Thumbs.db
+
+# Storage & Logs
+backend/storage/
+backend/download.log
+*.log
+
+# Node & Next.js folders
+node_modules/
+.next/
+dist/
+build/
+out/
