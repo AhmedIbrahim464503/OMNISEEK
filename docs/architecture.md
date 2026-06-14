@@ -1,13 +1,14 @@
 # System Architecture Overview
 
-This document provides a description of the architectural layout and division of concerns within the OMNISEEK backend server.
+This document provides a description of the architectural layout and division of concerns within the OMNISEEK system.
 
 ---
 
 ## 1. Clean Architecture Division
 
-The project adheres to Clean Architecture principles, ensuring that data definitions, SQL executions, and web handlers are decoupled. The code structure under `backend/` is split into:
+The project adheres to Clean Architecture principles, ensuring that data definitions, SQL executions, and web handlers are decoupled. The code structure is split into:
 
+*   **Frontend Application Layer (`frontend/src/app/`)**: Next.js 14+ App Router client layer, implementing interactive dashboards, drag-and-drop ingestion lists, visual charts, and media players. Links directly to backend endpoints.
 *   **API Layer (`backend/api/`)**: Exposes endpoint routing handles (using FastAPI) and routes incoming payloads. Contains no business validation or database queries. Registered routes:
     *   `/upload`: Synchronously ingests files and runs embedding pipelines.
     *   `/search`: Triggers cross-modal semantic similarity searches (Fast, Balanced, and Accurate profiles).
@@ -38,7 +39,8 @@ The system dependencies run unidirectionally inwards towards the database models
 
 ```mermaid
 graph TD
-    API[API Layer: upload/search/benchmark/dashboard] --> Services[Service Layer: IngestionService / SearchService / BenchmarkService]
+    FE[Next.js Frontend: Dashboard/Search/Upload/Analytics] --> API[API Layer: upload/search/benchmark/dashboard]
+    API --> Services[Service Layer: IngestionService / SearchService / BenchmarkService]
     Services --> Repositories[Repository Layer: Asset/Chunk/Search Repos]
     Repositories --> Models[Models: Asset, AssetChunk, SearchLog, EvaluationRun, SearchPerformanceLog]
     Services --> DB[Core Database: Async Session Engine]
