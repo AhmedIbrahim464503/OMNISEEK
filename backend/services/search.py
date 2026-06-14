@@ -5,6 +5,8 @@ from core.logging import logger
 from repositories.search import SemanticSearchRepository
 from services.search_embedding import SearchEmbeddingService
 from services.search_analytics import SearchAnalyticsService
+from services.cache import CacheService
+from api.metrics import metrics_collector
 
 class ScoreNormalizer:
     """Normalize raw cosine similarity scores into a strict 0.0 to 1.0 confidence range."""
@@ -133,6 +135,17 @@ class SearchService:
                 "results": []
             }
 
+        # Cache check
+        cache_key = f"search:{query}:{modality}:{mode}:{limit}:{minimum_score}"
+        try:
+            cached_data = await CacheService.get(cache_key)
+            if cached_data is not None:
+                total_ms = (time.perf_counter() - start_time) * 1000.0
+                metrics_collector.record_search(mode, total_ms / 1000.0)
+                return cached_data
+        except Exception as err:
+            logger.warning(f"Search cache bypass: {str(err)}")
+
         try:
             # 1. Generate query embedding
             embed_start = time.perf_counter()
@@ -233,7 +246,11 @@ class SearchService:
                 logger.error(f"F6 performance log failed: {e}")
                 await self.db.rollback()
 
-            return {
+            # Record Prometheus metrics
+            metrics_collector.record_db(retrieval_ms / 1000.0)
+            metrics_collector.record_search(mode, total_ms / 1000.0)
+
+            response_payload = {
                 "query": query,
                 "strategy": strategy,
                 "count": len(final_results),
@@ -245,6 +262,13 @@ class SearchService:
                 },
                 "results": final_results
             }
+            
+            try:
+                await CacheService.set(cache_key, response_payload, ttl=300)
+            except Exception as err:
+                logger.warning(f"Search cache write error: {str(err)}")
+
+            return response_payload
 
         except Exception as err:
             total_ms = (time.perf_counter() - start_time) * 1000.0

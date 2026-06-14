@@ -4,6 +4,8 @@ from models.chunk import AssetChunk
 from models.search_log import SearchLog
 from models.evaluation_run import EvaluationRun
 from models.performance_log import SearchPerformanceLog
+from models.user import User
+from models.task_status import TaskStatus
 
 __all__ = [
     "Base",
@@ -12,5 +14,7 @@ __all__ = [
     "AssetChunk",
     "SearchLog",
     "EvaluationRun",
-    "SearchPerformanceLog"
+    "SearchPerformanceLog",
+    "User",
+    "TaskStatus"
 ]
