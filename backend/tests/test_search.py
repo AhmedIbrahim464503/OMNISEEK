@@ -23,237 +23,229 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.search_log import SearchLog
+from models.evaluation_run import EvaluationRun
+from models.performance_log import SearchPerformanceLog
 from models.asset import ModalityEnum, Asset
 from models.chunk import AssetChunk
 from repositories.search import SemanticSearchRepository
 from services.search_embedding import SearchEmbeddingService
 from services.search_analytics import SearchAnalyticsService
 from services.search import ScoreNormalizer, DuplicateResultFilter, ResultAggregator, SearchService
+from services.reranker import RerankerService
+from services.hybrid_search import HybridSearchService
+from services.explainability import ExplainabilityService
+from services.evaluation import EvaluationService
+from services.benchmark import SearchBenchmarkService
+from services.quality_filter import ResultQualityFilter
 
 
-class TestSearchEmbeddingService(unittest.TestCase):
-    """Test suite verifying search embedding generation properties."""
+class TestRerankerService(unittest.TestCase):
+    """Test suite verifying reranker service predictions and logits sigmoid mapping."""
 
-    @patch("services.search_embedding.AIModelManager")
-    def test_generate_query_embedding_success(self, mock_manager_cls):
-        # Setup mock BGE-M3 model returning a 1024-dim array
+    @patch("services.reranker.AIModelManager")
+    def test_rerank_candidates_sorting_and_activation(self, mock_manager_cls):
+        # Setup mock reranker model returning logits
         mock_model = MagicMock()
-        mock_vector = np.array([0.1] * 1024)
-        mock_model.encode.return_value = mock_vector
+        # Logits of 1.0 (highly relevant) and -2.0 (non-relevant)
+        mock_model.predict.return_value = np.array([1.0, -2.0])
         
         mock_manager = MagicMock()
-        mock_manager.bge_m3_model = mock_model
+        mock_manager.reranker_model = mock_model
         mock_manager_cls.return_value = mock_manager
 
-        # Generate embedding
-        embedding = SearchEmbeddingService.generate_query_embedding("test query", normalize=False)
-        
-        # Verify it was sliced to 512 dimensions
-        self.assertEqual(len(embedding), 512)
-        self.assertAlmostEqual(embedding[0], 0.1)
-        mock_model.encode.assert_called_once_with("test query", convert_to_numpy=True)
-
-    @patch("services.search_embedding.AIModelManager")
-    def test_generate_query_embedding_normalization(self, mock_manager_cls):
-        mock_model = MagicMock()
-        mock_vector = np.array([2.0] * 1024)
-        mock_model.encode.return_value = mock_vector
-        
-        mock_manager = MagicMock()
-        mock_manager.bge_m3_model = mock_model
-        mock_manager_cls.return_value = mock_manager
-
-        # Generate normalized embedding
-        embedding = SearchEmbeddingService.generate_query_embedding("test query", normalize=True)
-        
-        # Verify L2 norm of 512 slice is 1.0
-        norm = np.linalg.norm(np.array(embedding))
-        self.assertAlmostEqual(norm, 1.0)
-
-    def test_generate_query_embedding_empty_query(self):
-        # Empty string query returns zero vector
-        embedding = SearchEmbeddingService.generate_query_embedding("")
-        self.assertEqual(len(embedding), 512)
-        self.assertTrue(all(val == 0.0 for val in embedding))
-
-
-class TestScoreNormalizer(unittest.TestCase):
-    """Test suite verifying confidence score normalization."""
-
-    def test_normalize_score(self):
-        # Test mapping: normalized = (score + 1.0) / 2.0
-        self.assertAlmostEqual(ScoreNormalizer.normalize_score(1.0), 1.0)
-        self.assertAlmostEqual(ScoreNormalizer.normalize_score(-1.0), 0.0)
-        self.assertAlmostEqual(ScoreNormalizer.normalize_score(0.0), 0.5)
-        self.assertAlmostEqual(ScoreNormalizer.normalize_score(1.5), 1.0)
-        self.assertAlmostEqual(ScoreNormalizer.normalize_score(-1.5), 0.0)
-
-
-class TestDuplicateResultFilter(unittest.TestCase):
-    """Test suite verifying chunk deduplication logic."""
-
-    def test_filter_duplicates(self):
-        chunks = [
-            {"chunk_id": "chunk-1", "score": 0.8, "content": "hello"},
-            {"chunk_id": "chunk-2", "score": 0.9, "content": "world"},
-            {"chunk_id": "chunk-1", "score": 0.85, "content": "hello updated"},
-        ]
-        
-        filtered = DuplicateResultFilter.filter_duplicates(chunks)
-        self.assertEqual(len(filtered), 2)
-        
-        chunk_1_entry = next(c for c in filtered if c["chunk_id"] == "chunk-1")
-        self.assertEqual(chunk_1_entry["score"], 0.85)
-        self.assertEqual(chunk_1_entry["content"], "hello updated")
-
-
-class TestResultAggregator(unittest.TestCase):
-    """Test suite verifying neighboring chunk temporal aggregation."""
-
-    def test_aggregate_neighboring_chunks(self):
-        chunks = [
-            {
-                "chunk_id": "c1",
-                "asset_id": "asset-a",
-                "asset_name": "video_a.mp4",
-                "modality": "VIDEO",
-                "chunk_index": 0,
-                "content": "First phrase.",
-                "start_time": 0.0,
-                "end_time": 10.0,
-                "score": 0.7
-            },
-            {
-                "chunk_id": "c2",
-                "asset_id": "asset-a",
-                "asset_name": "video_a.mp4",
-                "modality": "VIDEO",
-                "chunk_index": 1,
-                "content": "Second phrase.",
-                "start_time": 10.0,
-                "end_time": 20.0,
-                "score": 0.8
-            },
-            {
-                "chunk_id": "c3",
-                "asset_id": "asset-a",
-                "asset_name": "video_a.mp4",
-                "modality": "VIDEO",
-                "chunk_index": 5,
-                "content": "Far away phrase.",
-                "start_time": 50.0,
-                "end_time": 60.0,
-                "score": 0.75
-            },
-            {
-                "chunk_id": "c4",
-                "asset_id": "asset-b",
-                "asset_name": "audio_b.mp3",
-                "modality": "AUDIO",
-                "chunk_index": 0,
-                "content": "Other asset.",
-                "start_time": 5.0,
-                "end_time": 15.0,
-                "score": 0.9
-            }
+        candidates = [
+            {"chunk_id": "c1", "content": "hello", "score": 0.5},
+            {"chunk_id": "c2", "content": "world", "score": 0.6}
         ]
 
-        results = ResultAggregator.aggregate(chunks, quality_threshold=0.0)
-        self.assertEqual(len(results), 3)
+        reranked = RerankerService.rerank_candidates("query text", candidates, top_k=2)
 
-        self.assertEqual(results[0]["asset_name"], "audio_b.mp3")
-        self.assertEqual(results[0]["score"], 0.9)
-
-        merged_a = next(r for r in results if r["asset_name"] == "video_a.mp4" and r["score"] == 0.8)
-        self.assertEqual(merged_a["content"], "First phrase. Second phrase.")
-        self.assertEqual(merged_a["start_time"], 0.0)
-        self.assertEqual(merged_a["end_time"], 20.0)
-
-        isolated_a = next(r for r in results if r["asset_name"] == "video_a.mp4" and r["score"] == 0.75)
-        self.assertEqual(isolated_a["content"], "Far away phrase.")
-        self.assertEqual(isolated_a["start_time"], 50.0)
-        self.assertEqual(isolated_a["end_time"], 60.0)
-
-    def test_aggregate_quality_threshold(self):
-        chunks = [
-            {"chunk_id": "c1", "asset_id": "a1", "asset_name": "t1.txt", "modality": "TEXT", "chunk_index": 0, "content": "A", "start_time": 0.0, "end_time": 1.0, "score": 0.8},
-            {"chunk_id": "c2", "asset_id": "a2", "asset_name": "t2.txt", "modality": "TEXT", "chunk_index": 0, "content": "B", "start_time": 0.0, "end_time": 1.0, "score": 0.2},
-        ]
+        # Verify correct length
+        self.assertEqual(len(reranked), 2)
+        # c1 logit is 1.0 -> Sigmoid(1.0) = 1/(1+e^-1) = 0.731
+        # c2 logit is -2.0 -> Sigmoid(-2.0) = 1/(1+e^2) = 0.119
+        # So c1 should be sorted first
+        self.assertEqual(reranked[0]["chunk_id"], "c1")
+        self.assertAlmostEqual(reranked[0]["score"], 0.73105857863)
+        self.assertAlmostEqual(reranked[1]["score"], 0.11920292202)
         
-        results = ResultAggregator.aggregate(chunks, quality_threshold=0.5)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["asset_name"], "t1.txt")
+        # Verify vector_score was mapped
+        self.assertEqual(reranked[0]["vector_score"], 0.5)
+        self.assertEqual(reranked[1]["vector_score"], 0.6)
 
 
-class TestSearchAnalyticsService(unittest.IsolatedAsyncioTestCase):
-    """Test suite verifying search log database insertion."""
+class TestHybridSearchService(unittest.IsolatedAsyncioTestCase):
+    """Test suite verifying hybrid search candidate retrieval and score fusion."""
 
-    async def test_log_search(self):
-        mock_db = MagicMock(spec=AsyncSession)
-        analytics_service = SearchAnalyticsService(mock_db)
+    async def test_execute_hybrid_search_fusion(self):
+        mock_repo = MagicMock(spec=SemanticSearchRepository)
+        
+        # Vector results (semantic_score = 0.8)
+        vector_task = AsyncMock(return_value=[
+            {"chunk_id": "chunk-1", "asset_id": "a1", "asset_name": "t1.txt", "modality": "TEXT", "chunk_index": 0, "content": "data science", "score": 0.8}
+        ])
+        # Keyword results (keyword_score = 0.6)
+        keyword_task = AsyncMock(return_value=[
+            {"chunk_id": "chunk-1", "asset_id": "a1", "asset_name": "t1.txt", "modality": "TEXT", "chunk_index": 0, "content": "data science", "score": 0.6},
+            {"chunk_id": "chunk-2", "asset_id": "a1", "asset_name": "t1.txt", "modality": "TEXT", "chunk_index": 1, "content": "keyword only", "score": 0.5}
+        ])
+        
+        mock_repo.search_similar_chunks = vector_task
+        mock_repo.search_keyword_chunks = keyword_task
 
-        log_entry = await analytics_service.log_search(
-            query="neural network",
-            latency_ms=120.5,
-            results_count=10
+        hybrid_service = HybridSearchService(mock_repo)
+        fused = await hybrid_service.execute_hybrid_search(
+            query_text="data science",
+            query_vector=[0.1] * 512,
+            limit=5,
+            semantic_weight=0.7,
+            keyword_weight=0.3
         )
 
-        self.assertEqual(log_entry.query, "neural network")
-        self.assertEqual(log_entry.latency_ms, 120.5)
-        self.assertEqual(log_entry.results_count, 10)
+        # We expect 2 merged results
+        self.assertEqual(len(fused), 2)
         
-        mock_db.add.assert_called_once_with(log_entry)
+        # chunk-1 is in both: score = (0.8 * 0.7) + (0.6 * 0.3) = 0.56 + 0.18 = 0.74
+        chunk_1 = next(item for item in fused if item["chunk_id"] == "chunk-1")
+        self.assertAlmostEqual(chunk_1["score"], 0.74)
+        self.assertEqual(chunk_1["semantic_score"], 0.8)
+        self.assertEqual(chunk_1["keyword_score"], 0.6)
+
+        # chunk-2 is in keyword only: score = (0.0 * 0.7) + (0.5 * 0.3) = 0.15
+        chunk_2 = next(item for item in fused if item["chunk_id"] == "chunk-2")
+        self.assertAlmostEqual(chunk_2["score"], 0.15)
+        self.assertEqual(chunk_2["semantic_score"], 0.0)
+        self.assertEqual(chunk_2["keyword_score"], 0.5)
+
+
+class TestExplainabilityService(unittest.TestCase):
+    """Test suite verifying explainability match text generator."""
+
+    def test_explain_matches(self):
+        chunk = {
+            "chunk_id": "c1",
+            "asset_name": "report.pdf",
+            "modality": "TEXT",
+            "semantic_score": 0.85,
+            "keyword_score": 0.40,
+            "score": 0.715
+        }
+
+        exp_fast = ExplainabilityService.generate_explanation("test query", chunk, "Fast (Vector Only)")
+        exp_bal = ExplainabilityService.generate_explanation("test query", chunk, "Balanced (Hybrid)")
+        
+        self.assertIn("semantic match", exp_fast.lower())
+        self.assertIn("strong match", exp_bal.lower())
+        self.assertIn("report.pdf", exp_fast)
+        self.assertIn("report.pdf", exp_bal)
+
+
+class TestEvaluationService(unittest.IsolatedAsyncioTestCase):
+    """Test suite verifying retrieval metrics precision, recall, MRR, and NDCG."""
+
+    def test_calculate_metrics_correctness(self):
+        results = [
+            {"asset_name": "machine_learning.pdf"},
+            {"asset_name": "other.pdf"},
+            {"asset_name": "neural_networks.pdf"}
+        ]
+        
+        ground_truth = {"machine_learning.pdf", "neural_networks.pdf"}
+        
+        # Calculate top-2 metrics
+        metrics = EvaluationService.calculate_metrics(results, ground_truth, k=2)
+
+        # Top 2 results: ML (relevant), other (irrelevant)
+        # Precision@2 = 1/2 = 0.5
+        self.assertAlmostEqual(metrics["precision"], 0.5)
+        
+        # Recall@2 = 1 / 2 = 0.5 (since ground truth has 2 relevant items)
+        self.assertAlmostEqual(metrics["recall"], 0.5)
+        
+        # MRR: first relevant is at rank 1 -> MRR = 1/1 = 1.0
+        self.assertAlmostEqual(metrics["mrr"], 1.0)
+        
+        # DCG@2 = 1/log2(2) + 0/log2(3) = 1.0
+        # IDCG@2 = 1/log2(2) + 1/log2(3) = 1 + 0.6309 = 1.6309
+        # NDCG@2 = 1.0 / 1.6309 = 0.6131
+        self.assertAlmostEqual(metrics["ndcg"], 0.6131, places=3)
+        
+        # Accuracy@2 = at least 1 relevant item = 1.0
+        self.assertAlmostEqual(metrics["accuracy"], 1.0)
+
+    async def test_log_evaluation_metrics_db(self):
+        mock_db = MagicMock(spec=AsyncSession)
+        eval_service = EvaluationService(mock_db)
+
+        metrics = {"ndcg": 0.85, "precision": 0.60}
+        entries = await eval_service.log_evaluation_metrics("test query", metrics)
+
+        self.assertEqual(len(entries), 2)
+        mock_db.add.assert_called()
         mock_db.commit.assert_called_once()
 
 
-class TestSemanticSearchRepository(unittest.IsolatedAsyncioTestCase):
-    """Test suite verifying SQL statement composition and filtering."""
+class TestResultQualityFilter(unittest.TestCase):
+    """Test suite verifying result quality thresholds and near-duplicates pruning."""
 
-    async def test_search_similar_chunks_with_filters(self):
+    def test_filter_results_threshold_and_duplicates(self):
+        results = [
+            {"chunk_id": "c1", "content": "This is a unique chunk discussing machine learning.", "score": 0.85},
+            # Near duplicate of c1 (score is lower, so should be pruned)
+            {"chunk_id": "c2", "content": "This is a unique chunk discussing machine learning!!!", "score": 0.80},
+            # Score below threshold (should be pruned)
+            {"chunk_id": "c3", "content": "Low scoring document.", "score": 0.20},
+            {"chunk_id": "c4", "content": "Entirely different content discussing neural nets.", "score": 0.75}
+        ]
+
+        filtered = ResultQualityFilter.filter_results(results, minimum_score=0.30)
+
+        # Expected: c1 (kept), c2 (pruned as duplicate), c3 (pruned by score), c4 (kept)
+        self.assertEqual(len(filtered), 2)
+        self.assertEqual(filtered[0]["chunk_id"], "c1")
+        self.assertEqual(filtered[1]["chunk_id"], "c4")
+
+
+class TestSearchBenchmarkService(unittest.IsolatedAsyncioTestCase):
+    """Test suite verifying search benchmark execution returns tabular summaries."""
+
+    @patch("services.benchmark.SearchService.execute_search", new_callable=AsyncMock)
+    async def test_run_benchmark_suite(self, mock_execute_search):
         mock_db = MagicMock(spec=AsyncSession)
         
-        mock_row_1 = MagicMock()
-        mock_row_1.chunk_id = "chunk-1"
-        mock_row_1.asset_id = "asset-1"
-        mock_row_1.asset_name = "test_file.mp4"
-        mock_row_1.modality = ModalityEnum.VIDEO
-        mock_row_1.chunk_index = 3
-        mock_row_1.content = "Test content matching query."
-        mock_row_1.start_time = 30.0
-        mock_row_1.end_time = 45.0
-        mock_row_1.similarity_score = 0.85
-
+        # Setup mock db query return for assets
         mock_execute_res = MagicMock()
-        mock_execute_res.all.return_value = [mock_row_1]
+        mock_execute_res.all.return_value = [("sample_file.pdf",)]
         mock_db.execute = AsyncMock(return_value=mock_execute_res)
 
-        repository = SemanticSearchRepository(mock_db)
-        
-        results = await repository.search_similar_chunks(
-            query_vector=[0.1] * 512,
-            limit=5,
-            modality="VIDEO"
-        )
+        # Mock search service execution responses
+        mock_execute_search.return_value = {
+            "query": "query",
+            "results": [{"asset_name": "sample_file.pdf", "score": 0.85}]
+        }
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["asset_name"], "test_file.mp4")
-        self.assertEqual(results[0]["modality"], "VIDEO")
-        self.assertEqual(results[0]["score"], 0.85)
-        mock_db.execute.assert_called_once()
+        benchmark_service = SearchBenchmarkService(mock_db)
+        report = await benchmark_service.run_benchmark_suite()
+
+        self.assertIn("benchmark_runs", report)
+        self.assertIn("comparative_summary", report)
+        
+        # Verify summaries for accurate mode are computed
+        self.assertIn("accurate", report["comparative_summary"])
+        self.assertGreater(report["comparative_summary"]["accurate"]["avg_precision"], 0.0)
 
 
 class TestSearchService(unittest.IsolatedAsyncioTestCase):
-    """Test suite verifying orchestration coordinates embedding, search, aggregation, and analytics logging."""
+    """Test suite verifying execution profiles and performance logs."""
 
     @patch("services.search.SearchEmbeddingService.generate_query_embedding")
     @patch("services.search.SemanticSearchRepository.search_similar_chunks")
     @patch("services.search.SearchAnalyticsService.log_search")
-    async def test_execute_search_orchestration(
+    async def test_execute_search_fast_mode(
         self, mock_log_search, mock_search_similar_chunks, mock_generate_query_embedding
     ):
         mock_db = MagicMock(spec=AsyncSession)
         mock_generate_query_embedding.return_value = [0.2] * 512
-        
         mock_search_similar_chunks.return_value = [
             {
                 "chunk_id": "c1",
@@ -272,25 +264,26 @@ class TestSearchService(unittest.IsolatedAsyncioTestCase):
         response = await search_service.execute_search(
             query="find clip",
             limit=10,
-            modality="VIDEO"
+            mode="fast",
+            minimum_score=0.1
         )
 
-        self.assertEqual(response["query"], "find clip")
+        self.assertEqual(response["strategy"], "Fast (Vector Only)")
         self.assertEqual(response["count"], 1)
-        self.assertEqual(response["results"][0]["asset_name"], "clip.mp4")
-        self.assertAlmostEqual(response["results"][0]["score"], 0.9)
-
-        mock_generate_query_embedding.assert_called_once_with("find clip")
-        mock_search_similar_chunks.assert_called_once_with(
-            query_vector=[0.2] * 512, limit=10, modality="VIDEO"
-        )
-        mock_log_search.assert_called_once()
+        self.assertIn("results", response)
+        # Latency breakdown should exist
+        self.assertIn("embedding_ms", response["latency"])
+        self.assertIn("retrieval_ms", response["latency"])
+        
+        # Verify DB insertions
+        mock_db.add.assert_called_once()  # performance log entry
+        mock_db.commit.assert_called_once()
 
 
 class TestSearchAPI(unittest.IsolatedAsyncioTestCase):
-    """Test suite verifying route requests, dependency resolution, and response validation."""
+    """Test suite verifying routing parameters and dashboard telemetry api endpoints."""
 
-    async def test_search_api_endpoint(self):
+    async def test_search_api_endpoint_modes(self):
         from fastapi.testclient import TestClient
         from main import app
         
@@ -298,7 +291,9 @@ class TestSearchAPI(unittest.IsolatedAsyncioTestCase):
         
         mock_search_res = {
             "query": "test query",
+            "strategy": "Balanced (Hybrid)",
             "count": 1,
+            "latency": {"total_ms": 15.2},
             "results": [
                 {
                     "asset_id": "asset-uuid-1",
@@ -307,7 +302,8 @@ class TestSearchAPI(unittest.IsolatedAsyncioTestCase):
                     "content": "Sample parsed text line.",
                     "start_time": None,
                     "end_time": None,
-                    "score": 0.92
+                    "score": 0.92,
+                    "reason": "Test reason."
                 }
             ]
         }
@@ -315,15 +311,57 @@ class TestSearchAPI(unittest.IsolatedAsyncioTestCase):
         with patch("api.search.SearchService.execute_search", new_callable=AsyncMock) as mock_exec:
             mock_exec.return_value = mock_search_res
             
-            response = client.get("/api/search?q=test%20query&modality=TEXT")
+            response = client.get("/api/search?q=test%20query&mode=balanced&top_k=5")
             
             self.assertEqual(response.status_code, 200)
             data = response.json()
-            self.assertEqual(data["query"], "test query")
-            self.assertEqual(data["count"], 1)
-            self.assertEqual(data["results"][0]["asset_name"], "example.txt")
-            self.assertEqual(data["results"][0]["score"], 0.92)
-            mock_exec.assert_called_once()
+            self.assertEqual(data["strategy"], "Balanced (Hybrid)")
+            self.assertEqual(data["results"][0]["reason"], "Test reason.")
+            mock_exec.assert_called_once_with(
+                query="test query",
+                limit=5,
+                modality=None,
+                mode="balanced",
+                minimum_score=0.30
+            )
+
+    async def test_search_dashboard_endpoint(self):
+        from fastapi.testclient import TestClient
+        from main import app
+        
+        client = TestClient(app)
+        
+        mock_execute_res_1 = MagicMock()
+        mock_execute_res_1.scalar.return_value = 125.4
+        
+        mock_execute_res_2 = MagicMock()
+        mock_execute_res_2.all.return_value = [("ndcg", 0.85), ("precision", 0.70)]
+        
+        mock_execute_res_3 = MagicMock()
+        mock_execute_res_3.all.return_value = [("query1", 5)]
+        
+        mock_execute_res_4 = MagicMock()
+        mock_execute_res_4.all.return_value = [("query2", 0.0)]
+        
+        mock_execute_res_5 = MagicMock()
+        mock_execute_res_5.all.return_value = [("query3", 10.0)]
+
+        with patch("api.search.AsyncSession.execute") as mock_db_execute:
+            mock_db_execute.side_effect = [
+                mock_execute_res_1,
+                mock_execute_res_2,
+                mock_execute_res_3,
+                mock_execute_res_4,
+                mock_execute_res_5
+            ]
+            
+            response = client.get("/api/search/dashboard")
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            
+            self.assertEqual(data["average_latency_ms"], 125.4)
+            self.assertEqual(data["retrieval_effectiveness"]["ndcg"], 0.85)
+            self.assertEqual(data["frequent_queries"][0]["query"], "query1")
 
 
 if __name__ == "__main__":

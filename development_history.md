@@ -143,3 +143,22 @@ Implement unified cross-modal semantic search, pgvector similarity retrieval rep
 *   **Bug Resolution**: Resolved a pre-existing SQLAlchemy reserved attribute name collision by mapping `metadata` to `chunk_metadata` column and adding dynamic attribute getter/setter methods.
 *   **Testing Suite**: Added `backend/tests/test_search.py` containing 11 tests verifying all components using mock objects and Starlette TestClient.
 
+---
+
+## Phase 6: Advanced Retrieval Intelligence & Evaluation Framework
+*Timestamp: 2026-06-14T12:41:00+05:00*
+
+### Objectives
+Upgrade the semantic search engine to an enterprise-grade retrieval system utilizing cross-encoder reranking, full-text hybrid search, explainable matches, latency monitoring, search quality metrics, and performance benchmarking.
+
+### Key Implementations
+*   **Database Models**: Created `EvaluationRun` and `SearchPerformanceLog` schemas, exposed in models init, and migrated schema via `init_schema.py`.
+*   **AI Model Manager & Reranking**: Extended `AIModelManager` to load `BAAI/bge-reranker-base` on CPU, and implemented `RerankerService` to compute cross-encoder similarity logits normalized using Sigmoid.
+*   **FTS and Hybrid Search**: Added keyword FTS matching inside `SemanticSearchRepository` returning scores normalized via $rank / (rank + 1.0)$. Built `HybridSearchService` combining keyword FTS and semantic vector search using weighted linear score fusion.
+*   **Explainability & Quality Filters**: Built `ExplainabilityService` detailing matching rationales, and `ResultQualityFilter` validating minimum threshold score and pruning near-duplicate strings using overlap metrics.
+*   **Evaluation & Benchmarking**: Created `EvaluationService` calculating MRR, NDCG, Precision, Recall, and Accuracy, saving to `evaluation_runs`. Built `SearchBenchmarkService` running benchmark suites comparing vector, hybrid, and reranked pipelines.
+*   **Search Service Orchestrator**: Integrated execution profiles (`Fast`, `Balanced`, `Accurate`) dynamically controlling candidate limits, scoring combinations, and logging sub-component latencies.
+*   **Search API Handler**: Extended `GET /api/search` parameters to parse execution profiles, registered `POST /api/search/benchmark` endpoint, and exposed analytics via `GET /api/search/dashboard`.
+*   **Testing & Verification**: Created `backend/tests/test_search.py` containing 10 integration and unit tests, achieving 100% pass status under mock framework environment.
+
+
