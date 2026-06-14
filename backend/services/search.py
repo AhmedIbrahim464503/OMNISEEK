@@ -90,7 +90,10 @@ class ResultAggregator:
                     "content": item["content"],
                     "start_time": item["start_time"],
                     "end_time": item["end_time"],
-                    "score": round(item["score"], 4)
+                    "score": round(item["score"], 4),
+                    "semantic_score": round(item.get("semantic_score", item.get("score", 0.0)), 4),
+                    "keyword_score": round(item.get("keyword_score", 0.0), 4),
+                    "vector_score": round(item.get("vector_score", item.get("semantic_score", item.get("score", 0.0))), 4)
                 })
 
         # Sort descending by score
@@ -110,75 +113,143 @@ class SearchService:
         query: str,
         limit: int = 20,
         modality: Optional[str] = None,
-        quality_threshold: float = 0.0
+        mode: str = "fast",
+        minimum_score: float = 0.30
     ) -> Dict[str, Any]:
         """
-        Runs the semantic search workflow:
-        1. Generates the query embedding using BGE-M3.
-        2. Retrieves candidate chunks from pgvector.
-        3. Normalizes similarity scores.
-        4. Aggregates neighboring chunks and filters duplicates.
-        5. Logs metrics to console and db analytics.
+        Runs the search workflow according to execution profiles:
+        1. Fast: Vector search only.
+        2. Balanced: FTS + Vector hybrid search.
+        3. Accurate: FTS + Vector + Cross-Encoder reranker.
         """
         start_time = time.perf_counter()
         
         if not query.strip():
             return {
                 "query": query,
+                "strategy": "Unknown",
                 "count": 0,
+                "latency": {"total_ms": 0.0},
                 "results": []
             }
 
         try:
-            # Generate query embedding
+            # 1. Generate query embedding
+            embed_start = time.perf_counter()
             query_vector = SearchEmbeddingService.generate_query_embedding(query)
+            embed_ms = (time.perf_counter() - embed_start) * 1000.0
+
+            # 2. Retrieve candidates
+            retrieval_start = time.perf_counter()
             
-            # Retrieve similar candidates
-            candidates = await self.repository.search_similar_chunks(
-                query_vector=query_vector,
-                limit=limit,
-                modality=modality
+            # Larger retrieval pool limit for Reranking pipeline
+            retrieval_pool_limit = 50 if mode == "accurate" else limit
+
+            if mode == "fast":
+                candidates = await self.repository.search_similar_chunks(
+                    query_vector=query_vector,
+                    limit=retrieval_pool_limit,
+                    modality=modality
+                )
+                for c in candidates:
+                    # Normalize scores to [0.0, 1.0] for consistent threshold comparisons
+                    c["score"] = ScoreNormalizer.normalize_score(c["score"])
+                    c["semantic_score"] = c["score"]
+                    c["keyword_score"] = 0.0
+                    c["vector_score"] = c["score"]
+            else:
+                # Balanced or Accurate uses Hybrid search fusion
+                from services.hybrid_search import HybridSearchService
+                hybrid_service = HybridSearchService(self.repository)
+                candidates = await hybrid_service.execute_hybrid_search(
+                    query_text=query,
+                    query_vector=query_vector,
+                    limit=retrieval_pool_limit,
+                    modality=modality
+                )
+                
+            retrieval_ms = (time.perf_counter() - retrieval_start) * 1000.0
+
+            # 3. Rerank if in Accurate Mode
+            rerank_start = time.perf_counter()
+            if mode == "accurate" and candidates:
+                from services.reranker import RerankerService
+                candidates = RerankerService.rerank_candidates(
+                    query=query,
+                    candidates=candidates,
+                    top_k=limit
+                )
+            rerank_ms = (time.perf_counter() - rerank_start) * 1000.0
+
+            # 4. Result Aggregation (merges adjacent chunks)
+            aggregated_results = ResultAggregator.aggregate(candidates, quality_threshold=0.0)
+
+            # 5. Apply ResultQualityFilter (threshold + near-duplicates check)
+            from services.quality_filter import ResultQualityFilter
+            final_results = ResultQualityFilter.filter_results(
+                aggregated_results,
+                minimum_score=minimum_score
             )
-            candidate_count = len(candidates)
 
-            # Normalize scores in-place
-            for c in candidates:
-                c["score"] = ScoreNormalizer.normalize_score(c["score"])
+            # 6. Generate Match Reasons via ExplainabilityService
+            strategy = {
+                "fast": "Fast (Vector Only)",
+                "balanced": "Balanced (Hybrid)",
+                "accurate": "Accurate (Hybrid + Reranked)"
+            }.get(mode.lower(), "Custom Strategy")
 
-            # Aggregate and format
-            results = ResultAggregator.aggregate(candidates, quality_threshold=quality_threshold)
-            final_count = len(results)
-            top_score = results[0]["score"] if results else 0.0
+            from services.explainability import ExplainabilityService
+            for item in final_results:
+                item["reason"] = ExplainabilityService.generate_explanation(
+                    query=query,
+                    chunk=item,
+                    strategy=strategy
+                )
 
-            latency_ms = (time.perf_counter() - start_time) * 1000.0
+            total_ms = (time.perf_counter() - start_time) * 1000.0
 
-            # Log execution details locally
-            logger.info(
-                f"Semantic Search Complete: query='{query}', modality={modality}, "
-                f"latency={latency_ms:.2f}ms, candidates={candidate_count}, "
-                f"results={final_count}, top_score={top_score:.4f}"
-            )
-
-            # Persist search analytics to DB (async logging)
+            # Save Search Telemetry Log (F5 table)
             try:
                 await self.analytics_service.log_search(
                     query=query,
-                    latency_ms=latency_ms,
-                    results_count=final_count
+                    latency_ms=total_ms,
+                    results_count=len(final_results)
                 )
             except Exception as e:
-                logger.error(f"Failed to record search log to database: {str(e)}")
+                logger.error(f"F5 analytics log failed: {e}")
+
+            # Save Performance Latency Log (F6 table)
+            try:
+                from models.performance_log import SearchPerformanceLog
+                perf_log = SearchPerformanceLog(
+                    query=query,
+                    retrieval_ms=retrieval_ms,
+                    rerank_ms=rerank_ms,
+                    total_ms=total_ms
+                )
+                self.db.add(perf_log)
+                await self.db.commit()
+            except Exception as e:
+                logger.error(f"F6 performance log failed: {e}")
+                await self.db.rollback()
 
             return {
                 "query": query,
-                "count": final_count,
-                "results": results
+                "strategy": strategy,
+                "count": len(final_results),
+                "latency": {
+                    "embedding_ms": round(embed_ms, 2),
+                    "retrieval_ms": round(retrieval_ms, 2),
+                    "rerank_ms": round(rerank_ms, 2),
+                    "total_ms": round(total_ms, 2)
+                },
+                "results": final_results
             }
 
         except Exception as err:
-            latency_ms = (time.perf_counter() - start_time) * 1000.0
+            total_ms = (time.perf_counter() - start_time) * 1000.0
             logger.error(
                 f"Semantic Search Failure: query='{query}', modality={modality}, "
-                f"latency={latency_ms:.2f}ms, error='{str(err)}'"
+                f"latency={total_ms:.2f}ms, error='{str(err)}'"
             )
             raise err

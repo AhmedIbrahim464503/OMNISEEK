@@ -23,6 +23,7 @@ class AIModelManager:
             self._clip_processor: Any = None
             self._whisper_model: Any = None
             self._bge_m3_model: Any = None
+            self._reranker_model: Any = None
             self._load_lock = threading.Lock()
             self._initialized = True
 
@@ -102,3 +103,26 @@ class AIModelManager:
         """Fetch BGE-M3 sentence transformer instance, loading it on demand if absent."""
         self.load_bge_m3()
         return self._bge_m3_model
+
+    def load_reranker(self) -> None:
+        """Load BAAI/bge-reranker-base cross-encoder for semantic score refinement."""
+        if self._reranker_model is not None:
+            return
+            
+        with self._load_lock:
+            if self._reranker_model is not None:
+                return
+            try:
+                from sentence_transformers import CrossEncoder
+                logger.info("Loading BAAI/bge-reranker-base cross-encoder...")
+                self._reranker_model = CrossEncoder("BAAI/bge-reranker-base", device="cpu")
+                logger.info("Reranker model loaded successfully.")
+            except Exception as err:
+                logger.error(f"Reranker model initialization failed: {str(err)}")
+                raise
+
+    @property
+    def reranker_model(self) -> Any:
+        """Fetch Cross-Encoder reranker instance, loading it on demand if absent."""
+        self.load_reranker()
+        return self._reranker_model
