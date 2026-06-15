@@ -3,6 +3,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Dict
 from fastapi import FastAPI, Request, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -108,3 +109,6 @@ app.add_middleware(
 
 # Include primary API router
 app.include_router(api_router)
+
+# Mount static files to serve media assets
+app.mount("/storage", StaticFiles(directory="storage"), name="storage")

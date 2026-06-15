@@ -214,11 +214,30 @@ class SearchService:
 
             from services.explainability import ExplainabilityService
             for item in final_results:
-                item["reason"] = ExplainabilityService.generate_explanation(
+                rationale = ExplainabilityService.generate_explanation(
                     query=query,
                     chunk=item,
                     strategy=strategy
                 )
+                item["reason"] = rationale
+                
+                # Determine match type
+                match_type = "Semantic Vector"
+                if item["modality"] == "VIDEO":
+                    match_type = "Visual CLIP Vector"
+                elif mode == "balanced":
+                    match_type = "Hybrid Fused"
+                elif mode == "accurate":
+                    match_type = "Cross-Encoder Reranked"
+                    
+                item["explanation"] = {
+                    "match_type": match_type,
+                    "fused_score": item["score"],
+                    "semantic_score": item["semantic_score"],
+                    "keyword_score": item["keyword_score"],
+                    "reranker_score": item["score"] if mode == "accurate" and item["modality"] != "VIDEO" else None,
+                    "rationale": rationale
+                }
 
             total_ms = (time.perf_counter() - start_time) * 1000.0
 

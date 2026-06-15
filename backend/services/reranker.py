@@ -23,25 +23,35 @@ class RerankerService:
             model_manager = AIModelManager()
             model = model_manager.reranker_model
 
-            # Form list of (query, content) pairs for batch cross-encoder prediction
-            pairs = [(query, c["content"]) for c in candidates]
-            
-            # Compute cross-encoder scores (raw logits)
-            raw_scores = model.predict(pairs, batch_size=32, convert_to_numpy=True)
+            # Separate video and text/audio candidates
+            to_rerank = []
+            skipped = []
+            for c in candidates:
+                if c.get("modality") == "VIDEO":
+                    skipped.append(c)
+                else:
+                    to_rerank.append(c)
 
-            # Map raw logits to [0.0, 1.0] range using sigmoid normalization
-            normalized_scores = 1.0 / (1.0 + np.exp(-raw_scores))
-
-            # Update scores in-place on copies
+            # Rerank text/audio candidates using cross-encoder
             reranked_results = []
-            for idx, candidate in enumerate(candidates):
+            if to_rerank:
+                pairs = [(query, c["content"]) for c in to_rerank]
+                raw_scores = model.predict(pairs, batch_size=32, convert_to_numpy=True)
+                normalized_scores = 1.0 / (1.0 + np.exp(-raw_scores))
+                for idx, candidate in enumerate(to_rerank):
+                    updated_cand = dict(candidate)
+                    updated_cand["vector_score"] = candidate.get("score", 0.0)
+                    updated_cand["score"] = float(normalized_scores[idx])
+                    reranked_results.append(updated_cand)
+
+            # Keep video candidates as-is (vector score remains primary score)
+            for candidate in skipped:
                 updated_cand = dict(candidate)
-                # Keep record of original vector retrieval score, and assign new reranked score
                 updated_cand["vector_score"] = candidate.get("score", 0.0)
-                updated_cand["score"] = float(normalized_scores[idx])
+                updated_cand["score"] = candidate.get("score", 0.0)
                 reranked_results.append(updated_cand)
 
-            # Sort by new reranking score in descending order
+            # Sort by score in descending order
             reranked_results.sort(key=lambda x: x["score"], reverse=True)
 
             return reranked_results[:top_k]
