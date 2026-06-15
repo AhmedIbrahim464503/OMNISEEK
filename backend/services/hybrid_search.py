@@ -32,12 +32,15 @@ class HybridSearchService:
             modality=modality
         )
 
+        from services.search import ScoreNormalizer
+
         # Merge candidate pools
         merged_candidates: Dict[Any, Dict[str, Any]] = {}
 
-        # 1. Process vector candidates. Set initial scores.
+        # 1. Process vector candidates. Set initial scores (normalized).
         for item in vector_results:
             chunk_id = item["chunk_id"]
+            normalized_semantic = ScoreNormalizer.normalize_score(item["score"])
             merged_candidates[chunk_id] = {
                 "chunk_id": item["chunk_id"],
                 "asset_id": item["asset_id"],
@@ -47,7 +50,7 @@ class HybridSearchService:
                 "content": item["content"],
                 "start_time": item.get("start_time"),
                 "end_time": item.get("end_time"),
-                "semantic_score": item["score"],
+                "semantic_score": normalized_semantic,
                 "keyword_score": 0.0
             }
 
@@ -74,7 +77,12 @@ class HybridSearchService:
         # 3. Apply weighted fusion formula
         fused_results = []
         for chunk_id, cand in merged_candidates.items():
-            fused_score = (cand["semantic_score"] * semantic_weight) + (cand["keyword_score"] * keyword_weight)
+            if cand.get("modality") == "VIDEO":
+                # Visual modality elements do not benefit from full-text keyword indexing.
+                # Bypassing FTS fusion prevents penalizing visual assets.
+                fused_score = cand["semantic_score"]
+            else:
+                fused_score = (cand["semantic_score"] * semantic_weight) + (cand["keyword_score"] * keyword_weight)
             cand["score"] = fused_score
             fused_results.append(cand)
 

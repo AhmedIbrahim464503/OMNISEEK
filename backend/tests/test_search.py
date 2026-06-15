@@ -105,10 +105,10 @@ class TestHybridSearchService(unittest.IsolatedAsyncioTestCase):
         # We expect 2 merged results
         self.assertEqual(len(fused), 2)
         
-        # chunk-1 is in both: score = (0.8 * 0.7) + (0.6 * 0.3) = 0.56 + 0.18 = 0.74
+        # chunk-1 is in both: score = (0.9 * 0.7) + (0.6 * 0.3) = 0.63 + 0.18 = 0.81
         chunk_1 = next(item for item in fused if item["chunk_id"] == "chunk-1")
-        self.assertAlmostEqual(chunk_1["score"], 0.74)
-        self.assertEqual(chunk_1["semantic_score"], 0.8)
+        self.assertAlmostEqual(chunk_1["score"], 0.81)
+        self.assertEqual(chunk_1["semantic_score"], 0.9)
         self.assertEqual(chunk_1["keyword_score"], 0.6)
 
         # chunk-2 is in keyword only: score = (0.0 * 0.7) + (0.5 * 0.3) = 0.15
@@ -238,12 +238,14 @@ class TestSearchBenchmarkService(unittest.IsolatedAsyncioTestCase):
 class TestSearchService(unittest.IsolatedAsyncioTestCase):
     """Test suite verifying execution profiles and performance logs."""
 
+    @patch("services.search.CacheService.get", new_callable=AsyncMock)
     @patch("services.search.SearchEmbeddingService.generate_query_embedding")
     @patch("services.search.SemanticSearchRepository.search_similar_chunks")
     @patch("services.search.SearchAnalyticsService.log_search")
     async def test_execute_search_fast_mode(
-        self, mock_log_search, mock_search_similar_chunks, mock_generate_query_embedding
+        self, mock_log_search, mock_search_similar_chunks, mock_generate_query_embedding, mock_cache_get
     ):
+        mock_cache_get.return_value = None
         mock_db = MagicMock(spec=AsyncSession)
         mock_generate_query_embedding.return_value = [0.2] * 512
         mock_search_similar_chunks.return_value = [
@@ -328,8 +330,18 @@ class TestSearchAPI(unittest.IsolatedAsyncioTestCase):
     async def test_search_dashboard_endpoint(self):
         from fastapi.testclient import TestClient
         from main import app
+        from models.user import User
+        from services.auth import get_current_user
+        from core.db import get_db
+        import uuid
         
-        client = TestClient(app)
+        # Override auth dependency to return admin directly and bypass db check in dependency
+        admin_user = User(id=uuid.uuid4(), username="admin", role="ADMIN")
+        mock_db = MagicMock(spec=AsyncSession)
+        
+        # Configure mock_db to return counts for db.scalar
+        mock_db.scalar = AsyncMock()
+        mock_db.scalar.side_effect = [10, 100, 50]  # total_assets, total_chunks, total_searches
         
         mock_execute_res_1 = MagicMock()
         mock_execute_res_1.scalar.return_value = 125.4
@@ -346,22 +358,29 @@ class TestSearchAPI(unittest.IsolatedAsyncioTestCase):
         mock_execute_res_5 = MagicMock()
         mock_execute_res_5.all.return_value = [("query3", 10.0)]
 
-        with patch("api.search.AsyncSession.execute") as mock_db_execute:
-            mock_db_execute.side_effect = [
-                mock_execute_res_1,
-                mock_execute_res_2,
-                mock_execute_res_3,
-                mock_execute_res_4,
-                mock_execute_res_5
-            ]
-            
+        mock_db.execute = AsyncMock()
+        mock_db.execute.side_effect = [
+            mock_execute_res_1,
+            mock_execute_res_2,
+            mock_execute_res_3,
+            mock_execute_res_4,
+            mock_execute_res_5
+        ]
+        
+        app.dependency_overrides[get_current_user] = lambda: admin_user
+        app.dependency_overrides[get_db] = lambda: mock_db
+        
+        try:
+            client = TestClient(app)
             response = client.get("/api/search/dashboard")
             self.assertEqual(response.status_code, 200)
             data = response.json()
             
             self.assertEqual(data["average_latency_ms"], 125.4)
-            self.assertEqual(data["retrieval_effectiveness"]["ndcg"], 0.85)
-            self.assertEqual(data["frequent_queries"][0]["query"], "query1")
+            self.assertEqual(data["ndcg"], 0.85)
+            self.assertEqual(data["top_queries"][0]["query"], "query1")
+        finally:
+            app.dependency_overrides.clear()
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ export interface SearchResponse {
   results: SearchResultChunk[];
   latency: SearchLatencyBreakdown;
   strategy: string;
+  synthesis?: string;
 }
 
 export interface AnalyticsDashboard {

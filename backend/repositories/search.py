@@ -1,4 +1,5 @@
 import uuid
+import math
 from typing import Any, Dict, List, Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,8 +56,13 @@ class SemanticSearchRepository:
         
         result = await self.db.execute(stmt)
         
-        return [
-            {
+        results = []
+        for row in result.all():
+            raw_score = float(row.similarity_score) if row.similarity_score is not None else -1.0
+            if math.isnan(raw_score):
+                raw_score = -1.0
+            
+            results.append({
                 "chunk_id": row.chunk_id,
                 "asset_id": str(row.asset_id),
                 "asset_name": row.asset_name,
@@ -65,10 +71,9 @@ class SemanticSearchRepository:
                 "content": row.content,
                 "start_time": row.start_time,
                 "end_time": row.end_time,
-                "score": float(row.similarity_score) if row.similarity_score is not None else 0.0
-            }
-            for row in result.all()
-        ]
+                "score": raw_score
+            })
+        return results
 
     async def search_keyword_chunks(
         self,

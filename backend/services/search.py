@@ -132,6 +132,7 @@ class SearchService:
                 "query": query,
                 "strategy": "Unknown",
                 "count": 0,
+                "synthesis": "",
                 "latency": {"total_ms": 0.0},
                 "results": []
             }
@@ -270,10 +271,15 @@ class SearchService:
             metrics_collector.record_db(retrieval_ms / 1000.0)
             metrics_collector.record_search(mode, total_ms / 1000.0)
 
+            # 7. Generate Response Synthesis
+            from services.synthesis import ResponseSynthesisService
+            synthesis = ResponseSynthesisService.synthesize_response(query, final_results)
+
             response_payload = {
                 "query": query,
                 "strategy": strategy,
                 "count": len(final_results),
+                "synthesis": synthesis,
                 "latency": {
                     "embedding_ms": round(embed_ms, 2),
                     "retrieval_ms": round(retrieval_ms, 2),

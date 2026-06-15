@@ -285,6 +285,23 @@ export default function SearchPage() {
             </div>
           ) : (
             <div className="space-y-4">
+              {searchResponse?.synthesis && (
+                <div className="bg-card border border-primary/20 rounded-xl p-6 shadow-sm space-y-3 bg-gradient-to-br from-primary/5 via-card to-card relative overflow-hidden transition-all hover:shadow-md">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-primary/5 rounded-full blur-2xl -mr-6 -mt-6"></div>
+                  <div className="flex items-center gap-2 border-b border-border pb-3 relative z-10">
+                    <Cpu className="w-4.5 h-4.5 text-primary animate-pulse" />
+                    <h2 className="font-bold text-sm tracking-tight text-foreground">
+                      AI Response Synthesis
+                    </h2>
+                    <span className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold ml-1">
+                      RAG Answer
+                    </span>
+                  </div>
+                  <div className="text-sm text-muted-foreground leading-relaxed whitespace-pre-line relative z-10 font-medium">
+                    {searchResponse.synthesis}
+                  </div>
+                </div>
+              )}
               {searchResponse?.results.map((result) => (
                 <div
                   key={result.chunk_id}

@@ -39,8 +39,9 @@ class VideoEmbeddingService:
             return embedding_np.tolist()
         except Exception as err:
             logger.error(f"Failed to generate CLIP embedding for {image_path}: {str(err)}")
-            # Fail-safe fallback: return zero vector
-            return [0.0] * 512
+            # Fail-safe fallback: return L2-normalized mock vector instead of a zero vector to prevent NaN pgvector calculations
+            val = 1.0 / (512 ** 0.5)
+            return [val] * 512
 
     @staticmethod
     def process_video_audio(audio_path: str) -> List[Dict[str, Any]]:
